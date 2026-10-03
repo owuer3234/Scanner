@@ -1,0 +1,2274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ingredient Scanner</title>
+<meta name="description" content="Scan a product barcode and check its ingredients against a tiered safety database. Works offline.">
+<meta name="theme-color" content="#0d0f12">
+<meta name="color-scheme" content="dark light">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Scanner">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0d0f12;
+  --surface: #15191e;
+  --surface-2: #1d2228;
+  --border: #2a3139;
+  --text: #e9edf1;
+  --muted: #9aa4ae;
+  --accent: #4dabf7;
+  --accent-ink: #06121d;
+  --on-tier: #0d0f12;
+  --t1: #ff6b6b; --t1-bg: rgba(255, 107, 107, .14);
+  --t2: #ffa94d; --t2-bg: rgba(255, 169, 77, .14);
+  --t3: #ffd43b; --t3-bg: rgba(255, 212, 59, .12);
+  --t4: #51cf66; --t4-bg: rgba(81, 207, 102, .12);
+  --tn: #9aa4ae; --tn-bg: rgba(154, 164, 174, .14);
+  --radius: 14px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --surface-2: #eef0f3;
+    --border: #dce0e5;
+    --text: #14181d;
+    --muted: #5c6670;
+    --accent: #1971c2;
+    --accent-ink: #ffffff;
+    --on-tier: #ffffff;
+    --t1: #d32f2f; --t1-bg: rgba(211, 47, 47, .09);
+    --t2: #d9480f; --t2-bg: rgba(217, 72, 15, .10);
+    --t3: #a07800; --t3-bg: rgba(230, 180, 0, .15);
+    --t4: #2b8a3e; --t4-bg: rgba(43, 138, 62, .10);
+    --tn: #5c6670; --tn-bg: rgba(92, 102, 112, .10);
+  }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  font: 16px/1.45 var(--font);
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; }
+a { color: var(--accent); }
+svg { flex: none; }
+
+.t1 { --tc: var(--t1); --tbg: var(--t1-bg); }
+.t2 { --tc: var(--t2); --tbg: var(--t2-bg); }
+.t3 { --tc: var(--t3); --tbg: var(--t3-bg); }
+.t4 { --tc: var(--t4); --tbg: var(--t4-bg); }
+.tnone { --tc: var(--tn); --tbg: var(--tn-bg); }
+
+/* ------------------------------------------------ scanner (always dark) */
+#scanner { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #000; color: #fff; overflow: hidden; }
+#video { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .3s; }
+.cam-on #video { opacity: 1; }
+.viewfinder { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; padding-bottom: 40px; }
+body.cam-fallback .viewfinder { display: none; }
+.reticle {
+  position: relative;
+  width: min(82vw, 380px);
+  height: min(50vw, 230px);
+  border-radius: 18px;
+  box-shadow: 0 0 0 200vmax rgba(0, 0, 0, .5);
+}
+.reticle i { position: absolute; width: 36px; height: 36px; border: 0 solid #fff; transition: border-color .15s; }
+.reticle .tl { top: 0; left: 0; border-top-width: 4px; border-left-width: 4px; border-top-left-radius: 18px; }
+.reticle .tr { top: 0; right: 0; border-top-width: 4px; border-right-width: 4px; border-top-right-radius: 18px; }
+.reticle .bl { bottom: 0; left: 0; border-bottom-width: 4px; border-left-width: 4px; border-bottom-left-radius: 18px; }
+.reticle .br { bottom: 0; right: 0; border-bottom-width: 4px; border-right-width: 4px; border-bottom-right-radius: 18px; }
+.laser {
+  position: absolute; left: 7%; right: 7%; top: 50%; height: 2px; border-radius: 2px;
+  background: #ff5252; box-shadow: 0 0 10px 1px rgba(255, 82, 82, .8);
+  animation: sweep 2.4s ease-in-out infinite;
+}
+body:not(.cam-on) .laser { display: none; }
+.reticle.hit i { border-color: #51cf66; }
+.reticle.hit .laser { background: #51cf66; box-shadow: 0 0 14px 2px rgba(81, 207, 102, .9); animation: none; }
+@keyframes sweep { 0%, 100% { top: 14%; } 50% { top: 86%; } }
+@media (prefers-reduced-motion: reduce) { .laser { animation: none; } }
+.hint { margin-top: 22px; font-size: 14px; background: rgba(0, 0, 0, .55); padding: 7px 14px; border-radius: 999px; max-width: 86vw; text-align: center; }
+
+.topbar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+  display: flex; align-items: center; gap: 4px;
+  padding: calc(env(safe-area-inset-top) + 8px) 8px 18px 16px;
+  background: linear-gradient(rgba(0, 0, 0, .7), rgba(0, 0, 0, 0));
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 17px; margin-right: auto; letter-spacing: -.01em; }
+.icon-btn { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; color: #fff; }
+.icon-btn:active { background: rgba(255, 255, 255, .15); }
+.icon-btn.plain { color: var(--muted); }
+.icon-btn.plain:active { background: var(--surface-2); }
+
+.bottombar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: flex; justify-content: center; gap: 10px;
+  padding: 28px 16px calc(env(safe-area-inset-bottom) + 18px);
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .7));
+}
+.fab {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  min-width: 96px; padding: 11px 12px; border-radius: 16px; font-size: 12.5px; font-weight: 550;
+  color: #fff; background: rgba(255, 255, 255, .13); border: 1px solid rgba(255, 255, 255, .16);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.fab:active { background: rgba(255, 255, 255, .24); }
+.fab.on { background: #fff; color: #000; }
+
+.cam-fallback { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; padding: 90px 16px 120px; background: #0d0f12; }
+.fb-card { width: 100%; max-width: 420px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.fb-card svg { color: #9aa4ae; }
+.fb-card h2 { font-size: 20px; }
+.fb-card p { color: #b3bcc5; font-size: 14.5px; }
+.fb-form { display: flex; gap: 8px; width: 100%; margin-top: 6px; }
+.fb-form input { flex: 1; min-width: 0; padding: 12px 14px; border-radius: 12px; border: 1px solid #2a3139; background: #15191e; color: #e9edf1; font-size: 17px; letter-spacing: .04em; }
+.fb-actions { display: flex; gap: 8px; width: 100%; }
+.fb-actions .btn { flex: 1; }
+#scanner .btn.ghost { color: #e9edf1; border-color: #2a3139; background: #15191e; }
+
+/* ------------------------------------------------ buttons & forms */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 48px; padding: 0 18px; border-radius: 12px;
+  font-weight: 600; font-size: 16px; background: var(--accent); color: var(--accent-ink);
+  border: 1px solid transparent; text-decoration: none;
+}
+.btn:active { filter: brightness(.9); }
+.btn.ghost { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+.btn.block { width: 100%; }
+.form { display: flex; flex-direction: column; gap: 14px; }
+.form label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; }
+.form input, .form select, .form textarea {
+  width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border);
+  background: var(--surface-2); font-size: 16px; font-weight: 400; color: var(--text);
+}
+.form textarea { resize: vertical; min-height: 140px; line-height: 1.4; }
+.form input:focus, .form select:focus, .form textarea:focus, .searchbox:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ------------------------------------------------ bottom sheet */
+.backdrop { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 10; background: rgba(0, 0, 0, .4); opacity: 0; pointer-events: none; transition: opacity .25s; }
+.backdrop.show { opacity: 1; pointer-events: auto; }
+.sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  margin: 0 auto; max-width: 680px;
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - env(safe-area-inset-top) - 24px);
+  display: flex; flex-direction: column;
+  background: var(--surface); color: var(--text);
+  border-radius: 22px 22px 0 0;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, .45);
+  transform: translateY(105%);
+  transition: transform .34s cubic-bezier(.2, .85, .25, 1);
+  visibility: hidden;
+}
+.sheet.open { transform: none; visibility: visible; }
+.sheet:not(.open) { transition: transform .26s ease-in, visibility 0s .26s; }
+.sheet.full { height: calc(100vh - 48px); height: calc(100dvh - env(safe-area-inset-top) - 24px); }
+.sheet-grab { flex: none; padding: 8px 8px 4px 20px; touch-action: none; }
+.handle { display: block; width: 40px; height: 5px; border-radius: 3px; background: var(--border); margin: 0 auto 4px; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sheet-head h2 { font-size: 18px; font-weight: 650; }
+.sheet-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 8px 16px 24px; }
+.sheet-footer { flex: none; display: flex; gap: 10px; padding: 12px 16px calc(env(safe-area-inset-bottom) + 12px); border-top: 1px solid var(--border); background: var(--surface); }
+.sheet-footer .btn { flex: 1; }
+
+/* ------------------------------------------------ result content */
+.muted { color: var(--muted); }
+.small { font-size: 13.5px; }
+.center { text-align: center; }
+.mono { font-family: var(--mono); }
+.label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+
+.product { display: flex; gap: 14px; align-items: center; margin: 4px 0 16px; }
+.thumb {
+  position: relative; flex: none; width: 72px; height: 72px; border-radius: 14px; overflow: hidden;
+  background: var(--surface-2); color: var(--muted); display: flex; align-items: center; justify-content: center;
+}
+.thumb img { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; object-fit: cover; background: #fff; }
+.thumb.sm { width: 48px; height: 48px; border-radius: 10px; }
+.thumb.sm svg { width: 22px; height: 22px; }
+.product-text { min-width: 0; }
+.product h2 { font-size: 19px; line-height: 1.25; font-weight: 650; overflow-wrap: anywhere; }
+.product .meta { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+
+.verdict { display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: var(--radius); background: var(--tbg); border: 1px solid var(--tc); }
+.verdict-badge { flex: none; padding: 9px 14px; border-radius: 10px; background: var(--tc); color: var(--on-tier); font-weight: 800; font-size: 17px; letter-spacing: .06em; }
+.verdict-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.verdict-text strong { font-size: 15.5px; line-height: 1.3; }
+.verdict-text span { font-size: 13.5px; color: var(--muted); }
+
+.tierbar { display: flex; gap: 2px; height: 8px; border-radius: 4px; overflow: hidden; margin: 14px 0 8px; background: var(--surface-2); }
+.tierbar span { background: var(--tc); min-width: 4px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i, .tier-section h3 i, .browse summary i, .watch li > i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--tc); flex: none; }
+
+section { margin-top: 24px; }
+section h3 { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 650; margin-bottom: 8px; }
+.count { font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+
+.watch { padding: 14px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border); }
+.watch h3 svg { color: var(--t2); }
+.watch ul { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.watch li { display: flex; gap: 10px; align-items: flex-start; }
+.watch li > i { margin-top: 6px; }
+.watch li strong { display: block; font-size: 14.5px; overflow-wrap: anywhere; }
+.watch li span { display: block; font-size: 13.5px; color: var(--muted); }
+
+.flag, .info {
+  padding: 12px 14px; border-radius: 12px; margin-bottom: 10px;
+  background: var(--tbg); border-left: 4px solid var(--tc);
+}
+.flag header, .info header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.flag h4, .info h4 { font-size: 15.5px; line-height: 1.3; overflow-wrap: anywhere; }
+.flag-label { font-size: 12.5px; color: var(--muted); margin: 3px 0 6px; }
+.why { font-size: 14.5px; }
+.effects { margin: 8px 0 0 0; padding-left: 18px; font-size: 13.5px; color: var(--muted); }
+.effects li { margin: 2px 0; }
+.effects li::marker { color: var(--tc); }
+
+.pill {
+  flex: none; display: inline-flex; align-items: center; white-space: nowrap;
+  font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px;
+  color: var(--tc); background: var(--surface); border: 1px solid var(--tc);
+}
+
+.review p:last-child { font-size: 14px; }
+
+.chips { line-height: 1; }
+.chip {
+  display: inline-block; margin: 0 6px 7px 0; padding: 7px 10px; border-radius: 9px;
+  font-size: 14px; line-height: 1.25; text-align: left;
+  background: var(--tbg); border: 1px solid transparent; border-left: 4px solid var(--tc);
+  color: var(--text);
+}
+.chip.unlisted { border-style: dashed; border-color: var(--tc); border-left-style: solid; }
+.chip.sel { outline: 2px solid var(--tc); outline-offset: 1px; }
+.chip-group { display: inline; }
+.chip-group::before { content: "("; color: var(--muted); margin-right: 4px; }
+.chip-group::after { content: ")"; color: var(--muted); margin-right: 8px; }
+#chipInfo:not(:empty) { margin-top: 8px; }
+
+.disclaimer { margin-top: 22px; font-size: 12.5px; color: var(--muted); }
+
+.notice { display: flex; gap: 12px; padding: 14px; border-radius: var(--radius); background: var(--t2-bg); margin-bottom: 18px; }
+.notice-icon { color: var(--t2); padding-top: 2px; }
+.notice h3 { font-size: 16px; margin-bottom: 3px; }
+.notice p { font-size: 14.5px; }
+.qr-text { white-space: pre-wrap; word-break: break-all; font: 13px/1.4 var(--mono); padding: 12px; border-radius: 10px; background: var(--surface-2); }
+
+.loading { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 0 18px; text-align: center; }
+.spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--border); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.empty { text-align: center; padding: 28px 0; }
+.history { list-style: none; }
+.history li + li { border-top: 1px solid var(--border); }
+.history button { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 0; text-align: left; }
+.history svg:last-child { color: var(--muted); }
+.h-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.h-text strong { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-verdict { flex: none; font-size: 11px; font-weight: 800; letter-spacing: .05em; padding: 4px 8px; border-radius: 7px; background: var(--tc); color: var(--on-tier); }
+
+.searchbox { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); margin-bottom: 14px; }
+.searchbox input { flex: 1; min-width: 0; border: 0; background: none; padding: 13px 0; font-size: 16px; color: var(--text); outline: none; }
+.results { list-style: none; }
+.results li + li { border-top: 1px solid var(--border); }
+.results button { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 0; text-align: left; }
+.results button > span:first-child { display: flex; flex-direction: column; min-width: 0; }
+.results strong { font-size: 15px; }
+#searchOut > .btn { margin-bottom: 12px; }
+.browse { margin-bottom: 8px; border-radius: 12px; background: var(--surface-2); }
+.browse summary { display: flex; align-items: center; gap: 8px; padding: 13px 14px; font-weight: 600; cursor: pointer; list-style: none; }
+.browse summary::-webkit-details-marker { display: none; }
+.browse .chips { padding: 0 12px 6px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 110px); z-index: 30;
+  transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+  background: #23292f; color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .35); transition: opacity .2s, transform .2s; max-width: calc(100vw - 32px);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<main id="scanner" aria-label="Barcode scanner">
+  <video id="video" playsinline muted autoplay aria-hidden="true"></video>
+
+  <div class="viewfinder" aria-hidden="true">
+    <div class="reticle" id="reticle"><i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i><span class="laser"></span></div>
+    <p class="hint" id="scanHint">Loading scanner…</p>
+  </div>
+
+  <div class="cam-fallback" id="camFallback" hidden>
+    <div class="fb-card">
+      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 2l20 20"/><path d="M9 4h6l2 3h3a2 2 0 012 2v9m-3 3H4a2 2 0 01-2-2V9a2 2 0 012-2h3"/><path d="M9.5 9.5a3.5 3.5 0 004.95 4.95"/></svg>
+      <h2 id="fbTitle">Camera unavailable</h2>
+      <p id="fbText"></p>
+      <form class="fb-form" data-form="barcode">
+        <input name="code" type="text" inputmode="numeric" pattern="[0-9 ]*" autocomplete="off" maxlength="18" placeholder="Type barcode digits" aria-label="Barcode number" required>
+        <button class="btn" type="submit">Look up</button>
+      </form>
+      <div class="fb-actions">
+        <button class="btn ghost" data-action="paste">Paste ingredients</button>
+        <button class="btn ghost" data-action="retry-camera">Try again</button>
+      </div>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 7V5a2 2 0 012-2h2M17 3h2a2 2 0 012 2v2M21 17v2a2 2 0 01-2 2h-2M7 21H5a2 2 0 01-2-2v-2"/><path d="M7 8v8M10 8v8M13 8v8M17 8v8"/></svg><span>Ingredient Scanner</span></div>
+    <button class="icon-btn" id="installBtn" data-action="install" hidden aria-label="Install app"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></button>
+    <button class="icon-btn" data-action="search" aria-label="Look up an ingredient"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+    <button class="icon-btn" data-action="history" aria-label="Recent scans"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 103-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg></button>
+  </header>
+
+  <footer class="bottombar">
+    <button class="fab" data-action="manual"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg><span>Enter barcode</span></button>
+    <button class="fab" id="torchBtn" data-action="torch" hidden><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2h12v5l-3 4v11H9V11L6 7z"/><path d="M12 14v2"/></svg><span>Flashlight</span></button>
+    <button class="fab" data-action="paste"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><path d="M8 12h8M8 16h5"/></svg><span>Paste ingredients</span></button>
+  </footer>
+</main>
+
+<div class="backdrop" id="backdrop"></div>
+<section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" aria-hidden="true">
+  <div class="sheet-grab" id="sheetGrab">
+    <span class="handle" aria-hidden="true"></span>
+    <div class="sheet-head">
+      <h2 id="sheetTitle"></h2>
+      <button class="icon-btn plain" data-action="close" aria-label="Close"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+  </div>
+  <div class="sheet-body" id="sheetBody"></div>
+  <div class="sheet-footer" id="sheetFooter" hidden></div>
+</section>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="ingredient-db">
+/* ==========================================================================
+   INGREDIENT DATABASE
+   --------------------------------------------------------------------------
+   HOW TO ADD AN INGREDIENT
+   1. Find (or create) a GROUP below that describes it. A group holds the
+      shared tier, label, one-sentence "why" and list of health effects.
+   2. Add an entry to INGREDIENTS:
+        { group: 'parabens', names: ['Methylparaben', 'methyl paraben', 'E218'] }
+      - names[0] is the display name; the rest are synonyms / INCI / E-numbers.
+      - Matching is case-, accent- and punctuation-insensitive, so
+        'PEG-100' == 'peg 100' and 'Aluminium' == 'aluminum'.
+      - Any entry field overrides its group: tier, label, why, effects.
+      - exact: ['TEA']     -> these names only match when they are the WHOLE
+                              ingredient (stops 'tea' matching 'green tea').
+      - onlyIn: 'beauty' | 'food'   -> only applies to that product type.
+      - tierIn: { food: 2 }         -> different tier for that product type.
+      - ethoxylated: true           -> triggers the 1,4-dioxane warning.
+      - benzeneRisk: true           -> warns when combined with vitamin C.
+   3. Known-clean ingredients go in SAFE_INGREDIENTS (plain strings).
+   4. Pattern-based "chemical class" rules live in CLASS_RULES.
+
+   TIERS: 1 = Confirmed harmful (red)   2 = Likely harmful (orange)
+          3 = Precautionary (yellow)    4 = Clean (green)
+   ========================================================================== */
+
+const GROUPS = {
+  /* ---------------------------- TIER 1 ---------------------------- */
+  parabens: {
+    tier: 1, label: 'Paraben preservative',
+    why: 'Parabens are absorbed through the skin and mimic estrogen weakly; they are routinely detected in human urine, blood and breast tissue.',
+    effects: ['Endocrine disruption (estrogen mimic)', 'Reproductive effects in animal studies', 'Contact allergy (occasional)']
+  },
+  bannedParabens: {
+    tier: 1, label: 'Banned paraben',
+    why: 'Banned from EU cosmetics since 2014 because manufacturers could not demonstrate its safety; stronger estrogenic activity than short-chain parabens.',
+    effects: ['Endocrine disruption (estrogen mimic)', 'Reproductive toxicity concerns', 'Not permitted in EU cosmetics']
+  },
+  harshSulfates: {
+    tier: 1, label: 'Harsh sulfate surfactant',
+    why: 'A strong detergent that is a well-established skin and eye irritant — dermatology studies use it as the reference irritant.',
+    effects: ['Skin irritation & barrier damage', 'Eye irritation', 'Can aggravate eczema and mouth ulcers (toothpaste)']
+  },
+  antibacterials: {
+    tier: 1, label: 'Antibacterial agent',
+    why: 'Banned by the FDA from consumer antiseptic soaps in 2016 over hormone-disruption and antibiotic-resistance concerns.',
+    effects: ['Thyroid & hormone disruption', 'Antibiotic resistance', 'Persistent, toxic to aquatic life']
+  },
+  uvFiltersHarmful: {
+    tier: 1, label: 'Chemical UV filter',
+    why: 'Absorbed into the bloodstream at levels above the FDA threshold for further safety testing, with hormone-disrupting activity in studies.',
+    effects: ['Endocrine disruption', 'Allergic & photoallergic reactions', 'Coral reef toxicity']
+  },
+  aluminumSalts: {
+    tier: 1, label: 'Antiperspirant aluminum salt',
+    why: 'Aluminum salts plug sweat ducts and a small fraction is absorbed, more through shaved or broken skin; links to breast cancer are studied but unproven.',
+    effects: ['Aluminum absorption (higher on damaged skin)', 'Skin irritation', 'Studied (unproven) breast-cancer link']
+  },
+  formaldehyde: {
+    tier: 1, label: 'Formaldehyde',
+    why: 'Formaldehyde is a known human carcinogen (IARC Group 1) and one of the most common causes of cosmetic skin allergy.',
+    effects: ['Known human carcinogen', 'Allergic contact dermatitis', 'Eye & respiratory irritation']
+  },
+  formaldehydeReleasers: {
+    tier: 1, label: 'Formaldehyde-releasing preservative',
+    why: 'Slowly releases formaldehyde — a known human carcinogen and strong skin sensitizer — to keep the product preserved.',
+    effects: ['Releases formaldehyde (IARC Group 1 carcinogen)', 'Allergic contact dermatitis', 'Eye & respiratory irritation']
+  },
+  phthalates: {
+    tier: 1, label: 'Phthalate',
+    why: 'Plasticizers and fragrance solvents that disrupt hormones; DBP and DEHP are banned in EU cosmetics.',
+    effects: ['Endocrine disruption (anti-androgenic)', 'Reproductive & developmental toxicity', 'Linked to childhood asthma/allergy']
+  },
+  coalTar: {
+    tier: 1, label: 'Coal-tar dye / derivative',
+    why: 'Coal tar is a known human carcinogen (IARC Group 1), and coal-tar hair dyes are among the most potent skin allergens known.',
+    effects: ['Severe allergic contact dermatitis', 'Carcinogenicity concerns', 'Facial swelling / anaphylaxis (rare)']
+  },
+  hydroquinone: {
+    tier: 1, label: 'Skin-lightening agent',
+    why: 'Banned in EU cosmetics and removed from US over-the-counter sale in 2020 because of skin-darkening ochronosis and cancer concerns.',
+    effects: ['Exogenous ochronosis (blue-black skin)', 'Skin irritation', 'Carcinogenicity in animal studies']
+  },
+  mercury: {
+    tier: 1, label: 'Mercury compound',
+    why: 'Mercury is a potent neurotoxin; it is banned in most cosmetics but still turns up in imported skin-lightening creams.',
+    effects: ['Kidney damage', 'Neurological damage', 'Skin rash & discoloration']
+  },
+  lead: {
+    tier: 1, label: 'Lead compound',
+    why: 'The FDA withdrew approval of lead acetate in hair dye in 2018 — there is no known safe level of lead exposure.',
+    effects: ['Neurotoxicity', 'Reproductive toxicity', 'Probable human carcinogen']
+  },
+  solvents: {
+    tier: 1, label: 'Toxic solvent',
+    why: 'A volatile solvent (mostly in nail products) that is toxic to the developing fetus and depresses the nervous system.',
+    effects: ['Developmental / reproductive toxicity', 'Headache, dizziness', 'Respiratory irritation']
+  },
+  bha: {
+    tier: 1, label: 'Synthetic antioxidant',
+    why: 'Listed as "reasonably anticipated to be a human carcinogen" by the US National Toxicology Program and a suspected endocrine disruptor.',
+    effects: ['Possible carcinogen (IARC 2B)', 'Endocrine disruption', 'Skin depigmentation']
+  },
+  bht: {
+    tier: 1, tierIn: { food: 2 }, label: 'Synthetic antioxidant',
+    why: 'Synthetic preservative with thyroid, liver and hormone effects in animal studies; flagged most strongly in personal care.',
+    effects: ['Possible endocrine disruption', 'Liver & thyroid effects (animal studies)', 'Skin irritation']
+  },
+  petroleumDistillates: {
+    tier: 1, label: 'Petroleum distillate',
+    why: 'Crude-oil solvents that can carry carcinogenic impurities such as benzene and polycyclic aromatic hydrocarbons.',
+    effects: ['Possible benzene/PAH contamination', 'Skin & eye irritation', 'Respiratory irritation']
+  },
+  dioxane: {
+    tier: 1, label: 'Contaminant',
+    why: 'Classified as a likely human carcinogen by the US EPA; it is a byproduct of ethoxylation and is never listed on labels.',
+    effects: ['Likely human carcinogen', 'Liver & kidney toxicity', 'Hidden contaminant']
+  },
+  fragrance: {
+    tier: 1, label: 'Undisclosed fragrance mixture',
+    why: 'A trade-secret blend that can contain dozens of undisclosed chemicals, including phthalates and common allergens.',
+    effects: ['Top cause of cosmetic skin allergy', 'Can hide phthalates (endocrine disruptors)', 'Headaches / asthma triggers in sensitive people']
+  },
+  pfas: {
+    tier: 1, label: 'PFAS ("forever chemical")',
+    why: 'Fluorinated compounds that persist in the body and environment for years and are linked to cancer, immune and hormone effects.',
+    effects: ['Bioaccumulates — does not break down', 'Kidney & testicular cancer associations', 'Immune suppression & thyroid disruption']
+  },
+  bleach: {
+    tier: 1, label: 'Bleach',
+    why: 'Corrosive to skin, eyes and lungs, and releases toxic chlorine or chloramine gas if mixed with acids or ammonia.',
+    effects: ['Chemical burns & eye damage', 'Respiratory irritation / asthma', 'Toxic gas when mixed']
+  },
+  quatsDisinfectant: {
+    tier: 1, label: 'Disinfectant quaternary ammonium compound',
+    why: 'Disinfectant "quats" are linked to occupational asthma, skin irritation and antimicrobial resistance.',
+    effects: ['Asthma & respiratory irritation', 'Skin & eye irritation', 'Antimicrobial resistance; reproductive effects in animals']
+  },
+  transFat: {
+    tier: 1, label: 'Artificial trans fat',
+    why: 'Partially hydrogenated oils are the main source of artificial trans fat, which the FDA ruled is no longer "generally recognized as safe".',
+    effects: ['Raises LDL, lowers HDL cholesterol', 'Increased heart-disease risk']
+  },
+  euBannedFragrance: {
+    tier: 1, label: 'Banned fragrance chemical',
+    why: 'Banned from EU cosmetics in 2022 after being classified as toxic to reproduction.',
+    effects: ['Reproductive toxicity', 'Skin sensitization']
+  },
+
+  /* ---------------------------- TIER 2 ---------------------------- */
+  phenoxyethanol: {
+    tier: 2, label: 'Preservative',
+    why: 'Generally low-risk at ≤1%, but it irritates skin and eyes and the FDA has warned about exposure in nursing infants.',
+    effects: ['Skin & eye irritation', 'Allergic reactions (uncommon)', 'Nervous-system effects in infants at high exposure']
+  },
+  resorcinol: {
+    tier: 2, label: 'Hair dye / acne ingredient',
+    why: 'A skin sensitizer that can interfere with thyroid function.',
+    effects: ['Thyroid disruption', 'Skin sensitization', 'Eye irritation']
+  },
+  cyclosiloxanes: {
+    tier: 2, label: 'Cyclic silicone (siloxane)',
+    why: 'D4/D5/D6 cyclic silicones are persistent and bioaccumulative, D4 is a suspected endocrine disruptor, and the EU now restricts them.',
+    effects: ['Endocrine disruption (D4)', 'Reproductive toxicity (D4)', 'Environmental persistence']
+  },
+  ethanolamines: {
+    tier: 2, label: 'Ethanolamine',
+    why: 'DEA/MEA/TEA can react with other ingredients to form carcinogenic nitrosamines; DEA is banned in EU cosmetics.',
+    effects: ['Nitrosamine formation (carcinogens)', 'Skin & eye irritation', 'Liver effects in animal studies (DEA)']
+  },
+  peg: {
+    tier: 2, label: 'Polyethylene glycol (PEG)', ethoxylated: true,
+    why: 'PEGs are made by ethoxylation and can be contaminated with 1,4-dioxane and ethylene oxide; they also boost skin penetration of other ingredients.',
+    effects: ['1,4-dioxane & ethylene oxide contamination', 'Irritation on damaged skin', 'Increases penetration of other ingredients']
+  },
+  mineralOil: {
+    tier: 2, label: 'Petroleum-derived occlusive',
+    why: 'Cosmetic grades are refined, but poorly refined petroleum oils and jellies can contain carcinogenic aromatic hydrocarbons (MOAH/PAHs).',
+    effects: ['Possible PAH/MOAH contamination', 'Can clog pores in acne-prone skin', 'Accumulates in body fat (MOSH)']
+  },
+  titaniumDioxide: {
+    tier: 2, label: 'Mineral pigment / UV filter',
+    why: 'Safe on intact skin, but inhaled powder is a possible carcinogen (IARC 2B) and the EU banned it as a food additive (E171) in 2022.',
+    effects: ['Possible carcinogen when inhaled (IARC 2B)', 'Genotoxicity concerns for nano form in food', 'Lung inflammation from powders/sprays']
+  },
+  talc: {
+    tier: 2, label: 'Mineral powder',
+    why: 'Mined talc can be contaminated with asbestos, and IARC classified talc as probably carcinogenic (Group 2A) in 2024.',
+    effects: ['Asbestos contamination risk', 'Probably carcinogenic (IARC 2A)', 'Respiratory irritation when inhaled']
+  },
+  retinylPalmitate: {
+    tier: 2, label: 'Vitamin A ester',
+    why: 'In a US government study it sped up skin-tumor development under UV light — a concern in sunscreens and daytime products.',
+    effects: ['Possible photocarcinogenicity', 'Skin irritation', 'Excess vitamin A risk in pregnancy']
+  },
+  benzophenones: {
+    tier: 2, label: 'Benzophenone UV absorber',
+    why: 'Relatives of oxybenzone with hormone-disrupting activity; benzophenone itself is a possible carcinogen (IARC 2B).',
+    effects: ['Endocrine disruption', 'Possible carcinogen (IARC 2B)', 'Photoallergy']
+  },
+  uvFiltersConcern: {
+    tier: 2, label: 'Chemical UV filter',
+    why: 'Shows estrogenic and thyroid activity in studies and is being phased out of EU cosmetics.',
+    effects: ['Endocrine disruption', 'Bioaccumulation']
+  },
+  styrene: {
+    tier: 2, label: 'Styrene polymer',
+    why: 'May carry residual styrene monomer, which IARC classifies as probably carcinogenic (Group 2A).',
+    effects: ['Residual monomer — probable carcinogen', 'Nervous-system effects at high exposure']
+  },
+  butylated: {
+    tier: 2, label: 'Butylated antioxidant',
+    why: 'Belongs to the same synthetic antioxidant family as BHA/BHT, which carry endocrine and carcinogenicity concerns.',
+    effects: ['Possible endocrine disruption', 'Carcinogenicity concerns (class)']
+  },
+  isothiazolinones: {
+    tier: 2, label: 'Isothiazolinone preservative',
+    why: 'Caused a Europe-wide epidemic of contact allergy and is now banned from EU leave-on cosmetics.',
+    effects: ['Allergic contact dermatitis (very common)', 'Skin & eye irritation', 'Respiratory irritation (sprays)']
+  },
+  relatedSulfates: {
+    tier: 2, label: 'Sulfate surfactant',
+    why: 'Close chemical relative of SLS/SLES with similar irritation potential.',
+    effects: ['Skin & eye irritation', 'Barrier damage with frequent use']
+  },
+  redDye3: {
+    tier: 2, label: 'Synthetic dye',
+    why: 'The FDA revoked its authorization in food (effective 2027) because it caused thyroid tumors in rats.',
+    effects: ['Thyroid tumors in animal studies', 'Possible hyperactivity in children']
+  },
+  nitrites: {
+    tier: 2, label: 'Curing agent',
+    why: 'Forms carcinogenic nitrosamines, and the processed meats it cures are classified as carcinogenic to humans (IARC Group 1).',
+    effects: ['Nitrosamine formation', 'Colorectal cancer link (processed meat)']
+  },
+  glycolEthers: {
+    tier: 2, label: 'Glycol ether solvent',
+    why: 'Solvents with reproductive and blood toxicity in animal studies; some are restricted in EU cosmetics.',
+    effects: ['Reproductive toxicity', 'Blood (red-cell) toxicity', 'Eye & skin irritation']
+  },
+  bannedAllergen: {
+    tier: 2, label: 'Banned fragrance allergen',
+    why: 'A strong skin allergen that has been banned from EU cosmetics.',
+    effects: ['Allergic contact dermatitis', 'Sensitization']
+  },
+
+  /* ---------------------------- TIER 3 ---------------------------- */
+  polymersAcrylic: {
+    tier: 3, label: 'Acrylic polymer',
+    why: 'Synthetic acrylic polymers are low in toxicity but may contain residual monomers and do not biodegrade.',
+    effects: ['Residual monomers (irritant/sensitizer)', 'Non-biodegradable / microplastic concern']
+  },
+  syntheticWax: {
+    tier: 3, label: 'Synthetic / petroleum wax',
+    why: 'Petroleum- or plastic-derived waxes are low in toxicity but may carry trace impurities and do not biodegrade.',
+    effects: ['Possible trace petroleum impurities', 'Non-biodegradable']
+  },
+  syntheticHydrocarbon: {
+    tier: 3, label: 'Synthetic hydrocarbon',
+    why: 'Petroleum-derived hydrocarbon solvents and emollients; low acute toxicity but limited long-term data.',
+    effects: ['Possible trace petroleum impurities', 'Limited long-term safety data']
+  },
+  pegDerivative: {
+    tier: 3, label: 'PEG / glycol derivative',
+    why: 'Glycol polymer related to PEGs; the ethoxylated forms can carry 1,4-dioxane traces.',
+    effects: ['Possible manufacturing contaminants', 'Penetration enhancer']
+  },
+  polysorbates: {
+    tier: 3, label: 'Polysorbate emulsifier',
+    why: 'Ethoxylated emulsifiers that may carry 1,4-dioxane traces; polysorbate 80 disrupted gut bacteria in animal studies.',
+    effects: ['Possible 1,4-dioxane traces', 'Gut microbiome disruption (animal studies)']
+  },
+  vitaminEAcetate: {
+    tier: 3, label: 'Synthetic vitamin E',
+    why: 'Generally safe on skin, but can cause allergic reactions and was the main cause of lung injury when vaped (EVALI).',
+    effects: ['Contact dermatitis (occasional)', 'Lung injury if inhaled']
+  },
+  silicones: {
+    tier: 3, label: 'Silicone',
+    why: 'Silicone polymers have low toxicity but persist in the environment and can trap residue on skin and hair.',
+    effects: ['Environmental persistence', 'Can occlude pores / build up on hair']
+  },
+  naturalFragrance: {
+    tier: 3, label: 'Undisclosed "natural" fragrance',
+    why: 'Even a "natural" fragrance is an undisclosed blend and can contain common allergens.',
+    effects: ['Allergic reactions', 'Undisclosed components']
+  },
+  undisclosedPreservative: {
+    tier: 3, label: 'Unidentified preservative',
+    why: 'The preservative system is not named, so its safety cannot be assessed.',
+    effects: ['Unknown — ingredient not disclosed']
+  },
+  caramelColor: {
+    tier: 3, label: 'Caramel color',
+    why: 'Class III and IV (ammonia-processed) caramel colors can contain 4-MEI, a possible carcinogen (IARC 2B); labels rarely say which class.',
+    effects: ['Possible 4-MEI contamination (IARC 2B)']
+  },
+  benzoates: {
+    tier: 3, label: 'Benzoate preservative', benzeneRisk: true,
+    why: 'Can react with vitamin C (especially with heat or light) to form benzene, a known carcinogen.',
+    effects: ['Benzene formation with vitamin C', 'Possible hyperactivity link (with synthetic dyes)']
+  },
+  carrageenan: {
+    tier: 3, label: 'Thickener',
+    why: 'Seaweed-derived thickener; its degraded form causes gut inflammation in animals and some studies suggest food grade may too.',
+    effects: ['Gut inflammation (animal studies)', 'Possible glucose intolerance']
+  },
+  potassiumBromate: {
+    tier: 3, label: 'Flour improver',
+    why: 'Possible human carcinogen (IARC 2B), banned in the EU, UK and Canada.',
+    effects: ['Possible carcinogen (IARC 2B)', 'Kidney toxicity in animals']
+  },
+  bvo: {
+    tier: 3, label: 'Emulsifier',
+    why: 'The FDA banned it in 2024 after animal studies showed thyroid harm.',
+    effects: ['Thyroid toxicity', 'Bromine accumulation in tissue']
+  },
+  tbhq: {
+    tier: 3, label: 'Synthetic antioxidant',
+    why: 'Petroleum-derived preservative; animal studies suggest immune effects and tumors at high doses.',
+    effects: ['Possible immune-system effects', 'Tumors at high doses (animals)']
+  },
+  propylGallate: {
+    tier: 3, label: 'Synthetic antioxidant',
+    why: 'Suspected endocrine disruptor with equivocal evidence of tumors in rodents.',
+    effects: ['Possible endocrine disruption', 'Skin allergy', 'Rodent tumor findings (equivocal)']
+  },
+  syntheticDyes: {
+    tier: 3, label: 'Synthetic dye',
+    why: 'Petroleum-derived dye; the EU requires a warning label on foods with several of these because of links to hyperactivity in children.',
+    effects: ['Hyperactivity in sensitive children', 'Allergic reactions (esp. tartrazine)']
+  },
+  aspartame: {
+    tier: 3, label: 'Artificial sweetener',
+    why: 'Classified as possibly carcinogenic to humans (IARC 2B) in 2023, although intake limits were left unchanged.',
+    effects: ['Possible carcinogen (IARC 2B)', 'Unsafe for people with PKU']
+  },
+  uvFiltersPrecaution: {
+    tier: 3, label: 'Chemical UV filter',
+    why: 'The FDA has asked for more safety data on this filter; it degrades in sunlight or can form benzophenone over time.',
+    effects: ['Insufficient safety data', 'Skin allergy (occasional)']
+  },
+  fragranceAllergens: {
+    tier: 3, label: 'Declared fragrance allergen',
+    why: 'A fragrance component the EU requires to be labeled because it commonly causes skin allergies.',
+    effects: ['Allergic contact dermatitis', 'More sensitizing when oxidized']
+  },
+  doughConditioner: {
+    tier: 3, label: 'Dough conditioner',
+    why: 'Banned in the EU; it breaks down during baking into semicarbazide and urethane, which are possible carcinogens.',
+    effects: ['Breakdown products are possible carcinogens', 'Respiratory sensitizer (occupational)']
+  },
+  microplastic: {
+    tier: 3, label: 'Synthetic polymer (plastic)',
+    why: 'A plastic polymer that is low in toxicity but does not biodegrade and contributes to microplastic pollution.',
+    effects: ['Microplastic pollution', 'May carry residual monomers']
+  },
+  nitrates: {
+    tier: 3, label: 'Curing agent',
+    why: 'Converts to nitrite in food and the body, which can form carcinogenic nitrosamines.',
+    effects: ['Nitrosamine formation']
+  }
+};
+
+const INGREDIENTS = [
+  /* ===== TIER 1 ===== */
+  { group: 'parabens', names: ['Methylparaben', 'methyl paraben', 'sodium methylparaben', 'methyl 4-hydroxybenzoate', 'methyl p-hydroxybenzoate', 'E218', 'E219'] },
+  { group: 'parabens', names: ['Ethylparaben', 'ethyl paraben', 'sodium ethylparaben', 'ethyl 4-hydroxybenzoate', 'ethyl p-hydroxybenzoate', 'E214', 'E215'] },
+  { group: 'parabens', names: ['Propylparaben', 'propyl paraben', 'sodium propylparaben', 'propyl 4-hydroxybenzoate', 'propyl p-hydroxybenzoate', 'E216', 'E217'],
+    why: 'One of the more estrogenic parabens — the EU restricts its concentration and bans it in leave-on products for the diaper area of young children.' },
+  { group: 'parabens', names: ['Butylparaben', 'butyl paraben', 'sodium butylparaben', 'butyl 4-hydroxybenzoate', 'butyl p-hydroxybenzoate'],
+    why: 'The most estrogenic of the common parabens — the EU restricts its concentration and bans it in leave-on products for the diaper area of young children.' },
+  { group: 'bannedParabens', names: ['Isobutylparaben', 'isobutyl paraben', 'sodium isobutylparaben'] },
+  { group: 'bannedParabens', names: ['Isopropylparaben', 'isopropyl paraben', 'sodium isopropylparaben'] },
+  { group: 'bannedParabens', names: ['Benzylparaben', 'benzyl paraben'] },
+  { group: 'bannedParabens', names: ['Phenylparaben', 'phenyl paraben'] },
+  { group: 'bannedParabens', names: ['Pentylparaben', 'pentyl paraben'] },
+
+  { group: 'harshSulfates', names: ['Sodium Lauryl Sulfate', 'SLS', 'sodium dodecyl sulfate', 'SDS', 'sodium lauryl sulphate'], exact: ['SDS'] },
+  { group: 'harshSulfates', names: ['Sodium Laureth Sulfate', 'SLES', 'sodium lauryl ether sulfate', 'sodium laureth-2 sulfate', 'sodium laureth-3 sulfate', 'sodium pareth sulfate'], ethoxylated: true,
+    why: 'Ethoxylated cousin of SLS: irritating to skin and eyes and can be contaminated with 1,4-dioxane from manufacturing.',
+    effects: ['Skin & eye irritation', '1,4-dioxane contamination (likely carcinogen)', 'Barrier damage with frequent use'] },
+
+  { group: 'antibacterials', names: ['Triclosan', 'irgasan'] },
+  { group: 'antibacterials', names: ['Triclocarban', 'TCC', 'trichlorocarbanilide'], exact: ['TCC'] },
+
+  { group: 'uvFiltersHarmful', names: ['Oxybenzone', 'benzophenone-3', 'BP-3', 'BP3'] },
+  { group: 'uvFiltersHarmful', names: ['Octinoxate', 'ethylhexyl methoxycinnamate', 'octyl methoxycinnamate', 'OMC', 'EHMC', '2-ethylhexyl 4-methoxycinnamate'], exact: ['OMC'],
+    why: 'UV filter (also listed as ethylhexyl methoxycinnamate) with hormone-disrupting effects in animal studies; found in human blood, urine and breast milk.' },
+  { group: 'uvFiltersHarmful', names: ['Homosalate', 'homomenthyl salicylate', 'HMS'], exact: ['HMS'],
+    why: 'UV filter shown to disrupt hormones; the EU cut its permitted level from 10% to 7.34% and limited it to face products.' },
+
+  { group: 'aluminumSalts', names: ['Aluminum Chlorohydrate', 'aluminum chlorhydrate', 'aluminium chlorohydrate', 'aluminum hydroxychloride', 'aluminum sesquichlorohydrate', 'aluminum chloride', 'aluminum chlorohydrex', 'aluminum chlorohydrex gly', 'aluminum chlorohydrex pg', 'aluminum dichlorohydrate'] },
+  { group: 'aluminumSalts', names: ['Aluminum Zirconium Tetrachlorohydrex Gly', 'aluminum zirconium', 'aluminum zirconium trichlorohydrate', 'aluminum zirconium tetrachlorohydrate', 'aluminum zirconium pentachlorohydrate', 'aluminum zirconium octachlorohydrate', 'aluminum zirconium trichlorohydrex gly', 'aluminum zirconium pentachlorohydrex gly', 'aluminum zirconium octachlorohydrex gly'] },
+
+  { group: 'formaldehyde', names: ['Formaldehyde', 'formalin', 'methanal', 'methylene glycol', 'methylene oxide', 'oxymethylene'] },
+  { group: 'formaldehydeReleasers', names: ['DMDM Hydantoin', 'dimethylol dimethyl hydantoin', '1,3-dimethylol-5,5-dimethylhydantoin', 'glydant'] },
+  { group: 'formaldehydeReleasers', names: ['Imidazolidinyl Urea', 'imidurea', 'germall 115'] },
+  { group: 'formaldehydeReleasers', names: ['Diazolidinyl Urea', 'germall ii'] },
+  { group: 'formaldehydeReleasers', names: ['Quaternium-15', 'dowicil 200', 'cis-1-(3-chloroallyl)-3,5,7-triaza-1-azoniaadamantane chloride'] },
+  { group: 'formaldehydeReleasers', names: ['2-Bromo-2-Nitropropane-1,3-Diol', 'bronopol', 'BNPD'] },
+  { group: 'formaldehydeReleasers', names: ['5-Bromo-5-Nitro-1,3-Dioxane', 'bronidox'] },
+  { group: 'formaldehydeReleasers', names: ['Sodium Hydroxymethylglycinate', 'suttocide a'] },
+  { group: 'formaldehydeReleasers', names: ['Polyoxymethylene Urea'] },
+  { group: 'formaldehydeReleasers', names: ['Methenamine', 'hexamethylenetetramine', 'hexamine', 'E239'] },
+  { group: 'formaldehydeReleasers', names: ['Benzylhemiformal', 'benzyl hemiformal'] },
+
+  { group: 'phthalates', names: ['Dibutyl Phthalate', 'DBP', 'di-n-butyl phthalate', 'butyl phthalate'] },
+  { group: 'phthalates', names: ['Diethylhexyl Phthalate', 'DEHP', 'di(2-ethylhexyl) phthalate', 'bis(2-ethylhexyl) phthalate', 'dioctyl phthalate'] },
+  { group: 'phthalates', names: ['Diethyl Phthalate', 'DEP', 'ethyl phthalate'], exact: ['DEP'],
+    why: 'Fragrance solvent and plasticizer associated with hormone disruption and altered reproductive development in human studies.' },
+  { group: 'phthalates', names: ['Dimethyl Phthalate', 'DMP'], exact: ['DMP'] },
+  { group: 'phthalates', names: ['Benzyl Butyl Phthalate', 'BBP', 'butyl benzyl phthalate'] },
+
+  { group: 'coalTar', names: ['p-Phenylenediamine', 'PPD', 'para-phenylenediamine', 'paraphenylenediamine', '1,4-diaminobenzene', 'CI 76060'] },
+  { group: 'coalTar', names: ['Toluene-2,5-Diamine', 'toluene-2,5-diamine sulfate', 'PTD', 'p-toluenediamine'] },
+  { group: 'coalTar', names: ['Coal Tar', 'coal tar solution', 'pix carbonis', 'liquor carbonis detergens'] },
+  { group: 'coalTar', names: ['CI 77266', 'carbon black', 'black 2', 'D&C Black No. 2', 'channel black', 'furnace black'], label: 'Carbon black pigment',
+    why: 'Carbon black is a possible human carcinogen (IARC 2B), mainly by inhalation, and can carry polycyclic aromatic hydrocarbon impurities.',
+    effects: ['Possible carcinogen (IARC 2B, inhalation)', 'PAH impurities', 'Eye/lung irritation from loose powders'] },
+
+  { group: 'hydroquinone', names: ['Hydroquinone', '1,4-benzenediol', 'quinol', 'tocopheryl hydroquinone'] },
+  { group: 'mercury', names: ['Mercury', 'mercuric chloride', 'mercurous chloride', 'calomel', 'ammoniated mercury', 'mercuric iodide', 'mercuric oxide', 'phenylmercuric acetate', 'phenyl mercuric acetate', 'thimerosal', 'thiomersal', 'hydrargyrum'] },
+  { group: 'lead', names: ['Lead Acetate', 'lead(ii) acetate', 'plumbous acetate', 'sugar of lead', 'lead'] , exact: ['lead'] },
+  { group: 'solvents', names: ['Toluene', 'toluol', 'methylbenzene', 'phenylmethane'] },
+  { group: 'solvents', names: ['Benzene'], why: 'A known human carcinogen (IARC Group 1) that causes leukemia; it should never be an intentional ingredient.', effects: ['Leukemia (known human carcinogen)', 'Bone-marrow toxicity'] },
+  { group: 'bha', names: ['BHA', 'Butylated Hydroxyanisole', 'butylhydroxyanisole', 'tert-butyl-4-hydroxyanisole', 'E320'], exact: ['BHA'] },
+  { group: 'bht', names: ['BHT', 'Butylated Hydroxytoluene', 'butylhydroxytoluene', 'dibutylhydroxytoluene', 'E321'] },
+  { group: 'petroleumDistillates', names: ['Petroleum Distillates', 'petroleum distillate', 'naphtha', 'petroleum naphtha', 'kerosene', 'kerosine', 'mineral spirits', 'white spirit', 'stoddard solvent', 'ligroin', 'petroleum ether', 'benzine', 'petroleum', 'hydrotreated light distillate'], exact: ['petroleum'] },
+  { group: 'dioxane', names: ['1,4-Dioxane', 'dioxane', 'p-dioxane', 'diethylene dioxide'] },
+  { group: 'dioxane', names: ['Ethylene Oxide', 'oxirane'], why: 'A known human carcinogen (IARC Group 1) used to make ethoxylated ingredients and can remain as a residue.', effects: ['Known human carcinogen', 'Genotoxic', 'Hidden contaminant'] },
+
+  { group: 'fragrance', names: ['Fragrance', 'parfum', 'perfume', 'fragrances', 'fragrance oil', 'perfume oil', 'parfum fragrance', 'fragrance parfum', 'parfume', 'fragance', 'scent', 'aroma chemicals', 'synthetic fragrance', 'fragrance blend', 'masking fragrance'] },
+  { group: 'fragrance', names: ['Aroma'], onlyIn: 'beauty', exact: ['Aroma'], label: 'Undisclosed fragrance / flavor mixture' },
+
+  { group: 'pfas', names: ['PTFE', 'Polytetrafluoroethylene', 'teflon', 'PFAS', 'PFOA', 'PFOS', 'perfluorooctanoic acid', 'perfluorooctane sulfonate', 'perfluorodecalin', 'perfluorohexane', 'perfluoroperhydrophenanthrene', 'polyperfluoromethylisopropyl ether', 'perfluoropolymethylisopropyl ether', 'c9-15 fluoroalcohol phosphate', 'ptfe polytetrafluoroethylene', 'polyfluoroalkyl', 'perfluoroalkyl'] },
+  { group: 'bleach', names: ['Sodium Hypochlorite', 'hypochlorite', 'bleach', 'chlorine bleach', 'calcium hypochlorite'] },
+  { group: 'quatsDisinfectant', names: ['Benzalkonium Chloride', 'BAC', 'BKC', 'alkyldimethylbenzylammonium chloride', 'alkyl dimethyl benzyl ammonium chloride', 'ADBAC', 'benzalkonium bromide'], exact: ['BAC'] },
+  { group: 'quatsDisinfectant', names: ['Benzethonium Chloride', 'hyamine'] },
+  { group: 'quatsDisinfectant', names: ['DMDAAC', 'diallyldimethylammonium chloride', 'dimethyldiallylammonium chloride', 'DADMAC', 'DDAC', 'didecyldimethylammonium chloride', 'didecyl dimethyl ammonium chloride'] },
+  { group: 'transFat', names: ['Partially Hydrogenated Oil', 'partially hydrogenated', 'partially hydrogenated soybean oil', 'partially hydrogenated vegetable oil', 'partially hydrogenated cottonseed oil', 'partially hydrogenated palm oil', 'partially hydrogenated canola oil', 'shortening (partially hydrogenated)'] },
+  { group: 'euBannedFragrance', names: ['Butylphenyl Methylpropional', 'lilial', 'lilial aldehyde', 'p-tert-butyl-alpha-methylhydrocinnamic aldehyde'] },
+
+  /* ===== TIER 2 ===== */
+  { group: 'phenoxyethanol', names: ['Phenoxyethanol', '2-phenoxyethanol', 'ethylene glycol phenyl ether', 'phenoxetol', 'euxyl'] },
+  { group: 'resorcinol', names: ['Resorcinol', '1,3-benzenediol', 'resorcin', 'm-dihydroxybenzene', 'CI 76505'] },
+  { group: 'cyclosiloxanes', names: ['Cyclomethicone', 'cyclosiloxane', 'cyclosiloxanes'] },
+  { group: 'cyclosiloxanes', names: ['Cyclotetrasiloxane', 'D4', 'octamethylcyclotetrasiloxane'], exact: ['D4'] },
+  { group: 'cyclosiloxanes', names: ['Cyclopentasiloxane', 'D5', 'decamethylcyclopentasiloxane'], exact: ['D5'] },
+  { group: 'cyclosiloxanes', names: ['Cyclohexasiloxane', 'D6', 'dodecamethylcyclohexasiloxane'], exact: ['D6'] },
+  { group: 'cyclosiloxanes', names: ['Siloxanes', 'siloxane', 'polysiloxane'], label: 'Siloxane',
+    why: 'Siloxanes as a class are environmentally persistent, and the cyclic forms carry endocrine and reproductive concerns.' },
+  { group: 'ethanolamines', names: ['Diethanolamine', 'DEA', 'cocamide DEA', 'lauramide DEA', 'linoleamide DEA', 'oleamide DEA', 'DEA-cetyl phosphate', 'DEA-oleth-3 phosphate', 'myristamide DEA', 'stearamide DEA'] },
+  { group: 'ethanolamines', names: ['Monoethanolamine', 'MEA', 'ethanolamine', 'cocamide MEA', 'lauramide MEA', 'stearamide MEA', 'MEA-borate'] },
+  { group: 'ethanolamines', names: ['Triethanolamine', 'trolamine', 'TEA-lauryl sulfate', 'TEA-stearate', 'TEA-cocoyl glutamate', 'TEA-salicylate', 'TEA-dodecylbenzenesulfonate'] },
+  { group: 'ethanolamines', names: ['TEA'], onlyIn: 'beauty', exact: ['TEA'] },
+  { group: 'peg', names: ['Polyethylene Glycol', 'PEG', 'PEGs', 'macrogol', 'PEG compounds', 'polyethylene oxide', 'polyoxyethylene glycol'] },
+  { group: 'mineralOil', names: ['Mineral Oil', 'paraffinum liquidum', 'paraffin oil', 'liquid paraffin', 'white mineral oil', 'heavy mineral oil', 'light mineral oil', 'nujol', 'adepsine oil', 'baby oil'] },
+  { group: 'mineralOil', names: ['Petrolatum', 'petroleum jelly', 'white petrolatum', 'yellow petrolatum', 'vaseline', 'mineral jelly', 'soft paraffin', 'white soft paraffin', 'paraffin jelly'] },
+  { group: 'mineralOil', names: ['Paraffin', 'paraffin wax', 'paraffinum', 'hard paraffin', 'E905'] },
+  { group: 'titaniumDioxide', names: ['Titanium Dioxide', 'CI 77891', 'E171', 'titanium oxide', 'titania', 'titanium dioxide (nano)', 'nano titanium dioxide'] },
+  { group: 'talc', names: ['Talc', 'talcum', 'talcum powder', 'magnesium silicate hydroxide', 'E553b', 'cosmetic talc'] },
+  { group: 'retinylPalmitate', names: ['Retinyl Palmitate', 'vitamin a palmitate', 'retinol palmitate'] },
+  { group: 'benzophenones', names: ['Benzophenone', 'benzophenone-1', 'benzophenone-2', 'benzophenone-4', 'benzophenone-5', 'benzophenone-6', 'benzophenone-8', 'benzophenone-9', 'benzophenone-12', 'sulisobenzone', 'dioxybenzone', 'diphenylmethanone'] },
+  { group: 'uvFiltersConcern', names: ['4-Methylbenzylidene Camphor', '4-MBC', 'enzacamene', 'methylbenzylidene camphor', '3-(4-methylbenzylidene) camphor'] },
+  { group: 'uvFiltersConcern', names: ['3-Benzylidene Camphor', 'benzylidene camphor'], why: 'Banned from EU cosmetics because of its estrogenic activity.' },
+  { group: 'styrene', names: ['Styrene', 'styrene monomer', 'vinylbenzene', 'polystyrene', 'styrene/acrylates copolymer', 'styrene acrylates copolymer', 'ammonium styrene/acrylates copolymer', 'sodium styrene/acrylates copolymer', 'styrene/va copolymer'] },
+  { group: 'butylated', names: ['Butylated Compounds', 'butylated hydroxyquinone', 'butylated hydroxy compound'] },
+  { group: 'isothiazolinones', names: ['Methylisothiazolinone', 'MIT', 'MI', '2-methyl-4-isothiazolin-3-one', 'methylisothiazolone', 'kathon'], exact: ['MIT', 'MI'] },
+  { group: 'isothiazolinones', names: ['Methylchloroisothiazolinone', 'CMIT', 'MCI', 'methylchloroisothiazolinone/methylisothiazolinone', 'kathon cg'], exact: ['MCI'] },
+  { group: 'isothiazolinones', names: ['Benzisothiazolinone', 'BIT', '1,2-benzisothiazolin-3-one'], exact: ['BIT'] },
+  { group: 'isothiazolinones', names: ['Octylisothiazolinone', 'OIT', 'octhilinone'], exact: ['OIT'] },
+  { group: 'relatedSulfates', names: ['Ammonium Lauryl Sulfate', 'ALS', 'ammonium dodecyl sulfate'], exact: ['ALS'] },
+  { group: 'relatedSulfates', names: ['Ammonium Laureth Sulfate', 'ALES', 'ammonium lauryl ether sulfate'], ethoxylated: true,
+    why: 'Close relative of SLES: irritating and, being ethoxylated, can be contaminated with 1,4-dioxane.' },
+  { group: 'relatedSulfates', names: ['Sodium Coco-Sulfate', 'sodium coco sulfate', 'sodium cocosulfate', 'sodium coco-sulphate'],
+    why: 'Marketed as "natural", but it is mostly sodium lauryl sulfate made from coconut oil, with the same irritation potential.' },
+  { group: 'redDye3', names: ['Red 3', 'FD&C Red No. 3', 'FD&C Red 3', 'erythrosine', 'erythrosin', 'erythrosine b', 'E127', 'CI 45430', 'Red No. 3'] },
+  { group: 'nitrites', names: ['Sodium Nitrite', 'E250', 'nitrite'] },
+  { group: 'nitrites', names: ['Potassium Nitrite', 'E249'] },
+  { group: 'glycolEthers', names: ['2-Butoxyethanol', 'butoxyethanol', 'ethylene glycol monobutyl ether', 'butyl cellosolve'] },
+  { group: 'glycolEthers', names: ['2-Methoxyethanol', 'methoxyethanol', 'ethylene glycol monomethyl ether'] },
+  { group: 'glycolEthers', names: ['2-Ethoxyethanol', 'ethoxyethanol', 'ethylene glycol monoethyl ether', 'cellosolve'] },
+  { group: 'bannedAllergen', names: ['Hydroxyisohexyl 3-Cyclohexene Carboxaldehyde', 'lyral', 'HICC'] },
+  { group: 'bannedAllergen', names: ['Atranol'] },
+  { group: 'bannedAllergen', names: ['Chloroatranol'] },
+  { group: 'bannedAllergen', names: ['Musk Xylene', 'musk ketone', 'musk ambrette', 'galaxolide', 'tonalide', 'hexamethylindanopyran', 'polycyclic musk', 'nitro musk'], label: 'Synthetic musk',
+    why: 'Synthetic musks are persistent, accumulate in body fat and breast milk, and several (e.g. musk ambrette) are banned in the EU.',
+    effects: ['Bioaccumulation', 'Possible endocrine disruption', 'Skin sensitization'] },
+
+  /* ===== TIER 3 ===== */
+  { group: 'polymersAcrylic', names: ['Carbomer', 'carbopol', 'carboxypolymethylene', 'carbomer 940', 'carbomer 980'] },
+  { group: 'polymersAcrylic', names: ['Acrylates Copolymer', 'acrylates', 'acrylate copolymer', 'acrylates/c10-30 alkyl acrylate crosspolymer', 'sodium polyacrylate', 'polyacrylate', 'polyacrylamide', 'polyacrylate crosspolymer-6', 'acrylic acid'] },
+  { group: 'syntheticWax', names: ['Synthetic Wax', 'synthetic beeswax', 'microcrystalline wax', 'cera microcristallina', 'polyethylene wax', 'ceresin', 'ozokerite', 'paraffin microcrystalline', 'fischer-tropsch wax', 'petroleum wax'] },
+  { group: 'syntheticHydrocarbon', names: ['Isoparaffin', 'c13-14 isoparaffin', 'c11-13 isoparaffin', 'c9-11 isoparaffin', 'c13-16 isoparaffin', 'c12-14 isoparaffin', 'isohexadecane', 'isoeicosane', 'hydrogenated polyisobutene', 'polyisobutene', 'polybutene', 'hydrogenated polydecene'] },
+  { group: 'pegDerivative', names: ['Polypropylene Glycol', 'PPG', 'polyoxypropylene'] },
+  { group: 'pegDerivative', names: ['Polyoxyethylene', 'polyoxyl', 'POE', 'nonoxynol', 'octoxynol', 'oxynol', 'polyoxyethylene ether'], ethoxylated: true },
+  { group: 'polysorbates', names: ['Polysorbate', 'polysorbates', 'polysorbate 20', 'polysorbate 40', 'polysorbate 60', 'polysorbate 65', 'polysorbate 80', 'tween 20', 'tween 80', 'E432', 'E433', 'E434', 'E435', 'E436', 'polyoxyethylene sorbitan monooleate', 'polyoxyethylene (20) sorbitan monooleate'] },
+  { group: 'vitaminEAcetate', names: ['Tocopheryl Acetate', 'vitamin e acetate', 'dl-alpha tocopheryl acetate', 'dl-alpha-tocopheryl acetate', 'alpha tocopheryl acetate', 'dl-tocopheryl acetate', 'synthetic vitamin e', 'tocopheryl linoleate', 'tocopheryl succinate'] },
+  { group: 'silicones', names: ['Dimethicone', 'polydimethylsiloxane', 'PDMS', 'dimethiconol', 'amodimethicone', 'silicone', 'silicones', 'silicone oil', 'phenyl trimethicone', 'cetyl dimethicone', 'stearyl dimethicone', 'dimethicone crosspolymer', 'trimethylsiloxysilicate', 'E900'] },
+  { group: 'naturalFragrance', names: ['Natural Fragrance', 'natural fragrances', 'natural parfum', 'fragrance (natural)', 'fragrance natural', 'natural perfume', 'parfum (natural)', 'naturally derived fragrance', 'botanical fragrance', 'essential oil blend', 'essential oils blend', 'fragrance from natural sources', 'natural scent', 'natural aroma'] },
+  { group: 'undisclosedPreservative', names: ['Preservative', 'preservatives', 'natural preservative', 'natural preservatives', 'preservative system', 'proprietary preservative', 'preservative blend', 'contains preservatives', 'preservative added', 'eco-certified preservative'] },
+  { group: 'caramelColor', names: ['Caramel Color', 'caramel colour', 'caramel coloring', 'E150', 'E150c', 'E150d', 'caramel color iii', 'caramel color iv', 'ammonia caramel', 'sulfite ammonia caramel', 'ammonia sulfite caramel', 'class iii caramel', 'class iv caramel', 'caramel iv', 'caramel iii'] },
+  { group: 'benzoates', names: ['Sodium Benzoate', 'benzoate of soda', 'E211'] },
+  { group: 'benzoates', names: ['Potassium Benzoate', 'E212'] },
+  { group: 'benzoates', names: ['Benzoic Acid', 'E210'] },
+  { group: 'carrageenan', names: ['Carrageenan', 'carrageenans', 'E407', 'E407a', 'irish moss extract', 'chondrus crispus extract', 'processed eucheuma seaweed'] },
+  { group: 'potassiumBromate', names: ['Potassium Bromate', 'E924', 'bromated flour', 'bromated wheat flour', 'enriched bromated flour'] },
+  { group: 'bvo', names: ['Brominated Vegetable Oil', 'BVO', 'E443', 'brominated soybean oil'] },
+  { group: 'tbhq', names: ['TBHQ', 'Tertiary Butylhydroquinone', 'tert-butylhydroquinone', 't-butylhydroquinone', 'tertiary butyl hydroquinone', 'E319'] },
+  { group: 'propylGallate', names: ['Propyl Gallate', 'E310', 'propyl 3,4,5-trihydroxybenzoate'] },
+  { group: 'syntheticDyes', names: ['Red 40', 'FD&C Red No. 40', 'FD&C Red 40', 'Red No. 40', 'allura red', 'allura red ac', 'E129', 'CI 16035', 'red 40 lake'] },
+  { group: 'syntheticDyes', names: ['Yellow 5', 'FD&C Yellow No. 5', 'FD&C Yellow 5', 'Yellow No. 5', 'tartrazine', 'E102', 'CI 19140', 'yellow 5 lake'] },
+  { group: 'syntheticDyes', names: ['Yellow 6', 'FD&C Yellow No. 6', 'FD&C Yellow 6', 'Yellow No. 6', 'sunset yellow', 'sunset yellow fcf', 'E110', 'CI 15985', 'yellow 6 lake'] },
+  { group: 'syntheticDyes', names: ['Blue 1', 'FD&C Blue No. 1', 'FD&C Blue 1', 'Blue No. 1', 'brilliant blue', 'brilliant blue fcf', 'E133', 'CI 42090', 'blue 1 lake'] },
+  { group: 'syntheticDyes', names: ['Blue 2', 'FD&C Blue No. 2', 'FD&C Blue 2', 'Blue No. 2', 'indigotine', 'indigo carmine', 'E132', 'CI 73015', 'blue 2 lake'] },
+  { group: 'syntheticDyes', names: ['Green 3', 'FD&C Green No. 3', 'FD&C Green 3', 'Green No. 3', 'fast green fcf', 'E143', 'CI 42053'] },
+  { group: 'syntheticDyes', names: ['Quinoline Yellow', 'E104', 'CI 47005', 'D&C Yellow No. 10', 'yellow 10'] },
+  { group: 'syntheticDyes', names: ['Ponceau 4R', 'E124', 'CI 16255', 'cochineal red a'] },
+  { group: 'syntheticDyes', names: ['Carmoisine', 'azorubine', 'E122', 'CI 14720'] },
+  { group: 'aspartame', names: ['Aspartame', 'E951', 'nutrasweet', 'equal sweetener', 'aspartyl-phenylalanine methyl ester'] },
+  { group: 'uvFiltersPrecaution', names: ['Avobenzone', 'butyl methoxydibenzoylmethane', 'parsol 1789'] },
+  { group: 'uvFiltersPrecaution', names: ['Octocrylene', 'octocrilene'], why: 'UV filter that slowly degrades into benzophenone, a possible carcinogen (IARC 2B), as products age.' },
+  { group: 'uvFiltersPrecaution', names: ['Octisalate', 'ethylhexyl salicylate', 'octyl salicylate'] },
+  { group: 'fragranceAllergens', names: ['Limonene', 'd-limonene', 'dipentene'] },
+  { group: 'fragranceAllergens', names: ['Linalool', 'linalol'] },
+  { group: 'fragranceAllergens', names: ['Citronellol'] },
+  { group: 'fragranceAllergens', names: ['Geraniol'] },
+  { group: 'fragranceAllergens', names: ['Eugenol'] },
+  { group: 'fragranceAllergens', names: ['Isoeugenol'] },
+  { group: 'fragranceAllergens', names: ['Coumarin'] },
+  { group: 'fragranceAllergens', names: ['Citral'] },
+  { group: 'fragranceAllergens', names: ['Cinnamal', 'cinnamaldehyde', 'cinnamic aldehyde'] },
+  { group: 'fragranceAllergens', names: ['Cinnamyl Alcohol'] },
+  { group: 'fragranceAllergens', names: ['Hexyl Cinnamal', 'hexyl cinnamaldehyde', 'alpha-hexylcinnamaldehyde'] },
+  { group: 'fragranceAllergens', names: ['Amyl Cinnamal', 'amylcinnamaldehyde'] },
+  { group: 'fragranceAllergens', names: ['Amylcinnamyl Alcohol'] },
+  { group: 'fragranceAllergens', names: ['Benzyl Alcohol'] },
+  { group: 'fragranceAllergens', names: ['Benzyl Benzoate'] },
+  { group: 'fragranceAllergens', names: ['Benzyl Salicylate'] },
+  { group: 'fragranceAllergens', names: ['Benzyl Cinnamate'] },
+  { group: 'fragranceAllergens', names: ['Farnesol'] },
+  { group: 'fragranceAllergens', names: ['Alpha-Isomethyl Ionone', 'alpha isomethyl ionone', 'methyl ionone'] },
+  { group: 'fragranceAllergens', names: ['Anise Alcohol', 'anisyl alcohol'] },
+  { group: 'fragranceAllergens', names: ['Hydroxycitronellal'] },
+  { group: 'fragranceAllergens', names: ['Methyl 2-Octynoate', 'methyl heptine carbonate'] },
+  { group: 'fragranceAllergens', names: ['Evernia Prunastri Extract', 'oakmoss extract', 'oak moss extract', 'evernia prunastri (oakmoss) extract'] },
+  { group: 'fragranceAllergens', names: ['Evernia Furfuracea Extract', 'treemoss extract', 'tree moss extract'] },
+  { group: 'doughConditioner', names: ['Azodicarbonamide', 'ADA', 'E927', 'E927a'], exact: ['ADA'] },
+  { group: 'microplastic', names: ['Polyethylene', 'PE', 'polyethylene beads', 'polypropylene', 'nylon-12', 'nylon-6', 'nylon 12', 'polymethyl methacrylate', 'PMMA', 'polyethylene terephthalate', 'PET', 'glitter', 'polyurethane', 'polyester-1'], exact: ['PE', 'PET'] },
+  { group: 'nitrates', names: ['Sodium Nitrate', 'E251', 'potassium nitrate', 'E252'] }
+];
+
+/* Pattern rules: flag ingredients by chemical CLASS when they are not named
+   in INGREDIENTS above. `test(k)` receives a normalized name: lowercase,
+   punctuation replaced by single spaces (e.g. 'peg 100 stearate'). */
+const ETH_EXCEPTIONS = ['teeth', 'beneath', 'sixteenth', 'seventeenth', 'eighteenth', 'nineteenth', 'twentieth', 'thirtieth', 'fortieth', 'fiftieth', 'sixtieth', 'hundredth'];
+const CLASS_RULES = [
+  { id: 'pfas', tier: 1, label: 'Fluorinated compound — possible PFAS', test: k => /fluoro|perfluor|polyfluor|\bptfe\b|\bpfa\b|\bfep\b/.test(k),
+    why: 'Contains "fluoro" chemistry typical of PFAS "forever chemicals", which persist in the body and environment.',
+    effects: ['Bioaccumulates — does not break down', 'Cancer, immune and thyroid associations (PFAS class)'] },
+  { id: 'dioxane', tier: 1, label: 'Dioxane compound', test: k => /dioxane/.test(k),
+    why: 'Belongs to the dioxane family, which includes the likely human carcinogen 1,4-dioxane.',
+    effects: ['Possible carcinogen (class)', 'Liver & kidney toxicity (class)'] },
+  { id: 'phthalate', tier: 1, label: 'Phthalate (by name)', test: k => /phthalate/.test(k) && !/terephthalate/.test(k),
+    why: 'Named as a phthalate ester — a class of plasticizers linked to hormone disruption.',
+    effects: ['Endocrine disruption (class)', 'Reproductive toxicity (class)'] },
+  { id: 'formaldehyde', tier: 1, label: 'Formaldehyde donor (by structure)', test: k => /formaldehyde|formal\b|hydantoin|\bmethylol\b/.test(k) || (/bromo/.test(k) && /nitro/.test(k)),
+    why: 'Chemical structure matches formaldehyde-releasing preservatives (hydantoins, bromo-nitro compounds).',
+    effects: ['Possible formaldehyde release (carcinogen)', 'Allergic contact dermatitis'] },
+  { id: 'mercury', tier: 1, label: 'Mercury compound (by name)', test: k => /mercur|calomel|merthiolate/.test(k),
+    why: 'Contains mercury — a potent neurotoxin banned in most cosmetics.',
+    effects: ['Kidney damage', 'Neurological damage'] },
+  { id: 'lead', tier: 1, label: 'Lead compound (by name)', test: k => /\blead (acetate|carbonate|chromate|oxide|nitrate|sulfide|chloride)\b|plumb/.test(k),
+    why: 'Contains lead — there is no known safe level of lead exposure.',
+    effects: ['Neurotoxicity', 'Reproductive toxicity'] },
+  { id: 'disinfectant-quat', tier: 1, label: 'Disinfectant quat (by name)', test: k => /benzalkonium|benzethonium|benzyl ?ammonium|didecyl ?dimethyl ?ammonium|diallyl ?dimethyl ?ammonium/.test(k),
+    why: 'Matches disinfectant quaternary ammonium compounds linked to asthma and antimicrobial resistance.',
+    effects: ['Asthma & respiratory irritation', 'Skin & eye irritation'] },
+  { id: 'coal-tar', tier: 1, label: 'Coal-tar / aromatic amine dye', test: k => /coal tar|phenylenediamine|toluenediamine|toluene \d \d diamine|aminophenol/.test(k),
+    why: 'Aromatic amine hair-dye chemistry from the same family as p-phenylenediamine, a potent allergen.',
+    effects: ['Severe allergic reactions (class)', 'Carcinogenicity concerns (class)'] },
+  { id: 'cyclosiloxane', tier: 2, label: 'Siloxane (by name)', test: k => /siloxane|cyclomethicone/.test(k),
+    why: 'Named as a siloxane; cyclic siloxanes are persistent and some disrupt hormones.',
+    effects: ['Environmental persistence', 'Endocrine concerns (cyclic forms)'] },
+  { id: 'isothiazolinone', tier: 2, label: 'Isothiazolinone (by name)', test: k => /isothiazol/.test(k),
+    why: 'Member of the isothiazolinone preservative family, a leading cause of contact allergy.',
+    effects: ['Allergic contact dermatitis'] },
+  { id: 'ethanolamine', tier: 2, label: 'Ethanolamine derivative', test: k => /ethanolamine|\b(dea|mea|mipa)\b/.test(k) || /^tea (?=\S*(yl|ate|eth|ide|ine)\b)/.test(k),
+    why: 'Contains a DEA/MEA/TEA group, which can form carcinogenic nitrosamines.',
+    effects: ['Nitrosamine formation (carcinogens)', 'Skin irritation'] },
+  { id: 'butylated', tier: 2, label: 'Butylated compound', test: k => /butylated/.test(k),
+    why: 'A "butylated" synthetic antioxidant from the BHA/BHT family.',
+    effects: ['Possible endocrine disruption (class)'] },
+  { id: 'peg', tier: 2, label: 'PEG compound (by name)', ethoxylated: true, test: k => /\bpeg\b|polyethylene glycol/.test(k),
+    why: 'A PEG (polyethylene glycol) compound — made by ethoxylation, which can leave 1,4-dioxane.',
+    effects: ['Possible 1,4-dioxane & ethylene oxide contamination', 'Penetration enhancer'] },
+  { id: 'hormone', tier: 2, label: 'Hormone / placental extract', test: k => /estradiol|estrone|estriol|progesterone|placenta|placental/.test(k),
+    why: 'Contains hormones or placental extract, which can affect hormone balance — especially in children.',
+    effects: ['Hormonal effects', 'Early puberty concerns in children'] },
+  { id: 'paraben', tier: 3, label: 'Paraben (by name)', test: k => /paraben/.test(k),
+    why: 'Ends in "-paraben": a member of the paraben preservative family, which mimics estrogen.',
+    effects: ['Possible endocrine disruption (class)'] },
+  { id: 'ethoxylated', tier: 3, label: 'Ethoxylated ingredient (-eth)', ethoxylated: true, test: k => hasEthSuffix(k) || /polyoxyethylene|oxynol|\bpolyoxyl\b|\bpoe\b/.test(k),
+    why: 'The "-eth" naming means it was ethoxylated, a process that can leave 1,4-dioxane and ethylene oxide behind.',
+    effects: ['Possible 1,4-dioxane contamination', 'Possible ethylene oxide residues'] },
+  { id: 'ppg', tier: 3, label: 'PPG / glycol polymer', test: k => /\bppg\b|polypropylene glycol|polyglycol/.test(k),
+    why: 'A propylene-glycol polymer related to PEGs, with limited long-term data.',
+    effects: ['Penetration enhancer', 'Possible manufacturing contaminants'] },
+  { id: 'silicone', tier: 3, label: 'Silicone (by name)', test: k => /methicone|dimethiconol|silicone|silsesquioxane|silylate|\bsilane\b|siloxysilicate/.test(k),
+    why: 'A silicone derivative — low toxicity but persistent in the environment.',
+    effects: ['Environmental persistence', 'Can build up on skin and hair'] },
+  { id: 'acrylate', tier: 3, label: 'Acrylic polymer (by name)', test: k => /acryl|carbomer/.test(k),
+    why: 'An acrylate/carbomer polymer that may contain residual monomers.',
+    effects: ['Residual monomers (irritant/sensitizer)', 'Non-biodegradable'] },
+  { id: 'plastic', tier: 3, label: 'Synthetic plastic polymer', test: k => /\bpolyethylene\b|\bpolypropylene\b|\bnylon \d|methacrylate|polystyrene|terephthalate|polyurethane/.test(k),
+    why: 'A plastic polymer — not readily biodegradable and a microplastic concern.',
+    effects: ['Microplastic pollution', 'Residual monomers'] },
+  { id: 'quat', tier: 3, label: 'Quaternary ammonium compound', test: k => /trimonium|dimonium|quaternium|polyquaternium|pyridinium|\w+ammonium (chloride|bromide|methosulfate)/.test(k),
+    why: 'A conditioning "quat" from the same chemical class as disinfectant quats; it can irritate skin and eyes and persists in waterways.',
+    effects: ['Skin & eye irritation', 'Environmental persistence'] },
+  { id: 'alkyl-sulfate', tier: 3, label: 'Sulfate / sulfonate surfactant', test: k => /\b(lauryl|myristyl|cetyl|cetearyl|decyl|octyl|coco|alkyl|tridecyl|myreth|pareth|trideceth)\b.*\bsulfate\b|\bolefin sulfonate\b|benzenesulfonate/.test(k),
+    why: 'A detergent of the sulfate/sulfonate type, related to the irritant SLS.',
+    effects: ['Skin & eye irritation', 'Barrier damage with frequent use'] },
+  { id: 'aluminum', tier: 3, label: 'Aluminum compound', test: k => /\baluminum\b|\balum\b/.test(k),
+    why: 'An aluminum-containing compound; absorption is usually low but it adds to total aluminum exposure.',
+    effects: ['Contributes to aluminum exposure'] },
+  { id: 'synthetic-dye', tier: 3, label: 'Synthetic organic dye', test: k => { const m = k.match(/\bci (\d{5})\b/); return (m && +m[1] < 75000) || /\b(fd c|d c|ext d c)\b/.test(k) || /\blake\b/.test(k) && /\b(red|yellow|blue|green|orange|violet)\b/.test(k); },
+    why: 'A synthetic (often coal-tar or petroleum-derived) color; some cause allergies or hyperactivity in sensitive children.',
+    effects: ['Allergic reactions', 'Possible hyperactivity (food dyes)'] },
+  { id: 'nano', tier: 3, label: 'Nanoparticle form', test: k => /\bnano\b|nanoparticle/.test(k),
+    why: 'Labeled as a nanomaterial; nanoparticles can behave differently from the bulk material and long-term data are limited.',
+    effects: ['Possible deeper penetration', 'Limited safety data'] },
+  { id: 'nitrosamine', tier: 1, label: 'Nitrosamine', test: k => /nitrosamine|n nitroso/.test(k),
+    why: 'Nitrosamines are potent carcinogens and are banned as cosmetic ingredients.',
+    effects: ['Potent carcinogen'] }
+];
+function hasEthSuffix(k) {
+  const words = k.split(' ');
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w.length > 4 && w.endsWith('eth') && ETH_EXCEPTIONS.indexOf(w) === -1) return true;
+  }
+  return false;
+}
+
+/* Known-clean ingredients (tier 4). Plain names; matching is case/punctuation-insensitive. */
+const SAFE_INGREDIENTS = [
+  // water & humectants
+  'water', 'aqua', 'eau', 'purified water', 'deionized water', 'distilled water', 'spring water', 'mineral water', 'thermal spring water', 'carbonated water', 'filtered water',
+  'glycerin', 'glycerine', 'glycerol', 'vegetable glycerin', 'E422', 'butylene glycol', 'propylene glycol', 'propanediol', '1,3-propanediol', 'pentylene glycol', 'caprylyl glycol', '1,2-hexanediol', 'hexanediol', 'ethylhexylglycerin',
+  'sorbitol', 'E420', 'xylitol', 'E967', 'erythritol', 'E968', 'mannitol', 'maltitol', 'isomalt', 'honey', 'mel', 'urea', 'betaine', 'sodium pca', 'zinc pca', 'sodium lactate', 'trehalose', 'inositol',
+  'hyaluronic acid', 'sodium hyaluronate', 'hydrolyzed hyaluronic acid', 'sodium acetylated hyaluronate', 'panthenol', 'd-panthenol', 'dexpanthenol', 'provitamin b5', 'allantoin', 'bisabolol', 'squalane', 'squalene',
+  // acids, buffers, chelators
+  'citric acid', 'E330', 'sodium citrate', 'trisodium citrate', 'E331', 'lactic acid', 'E270', 'malic acid', 'E296', 'tartaric acid', 'E334', 'acetic acid', 'E260', 'vinegar', 'apple cider vinegar', 'white vinegar',
+  'ascorbic acid', 'E300', 'sodium ascorbate', 'E301', 'calcium ascorbate', 'vitamin c', 'ascorbyl palmitate', 'E304', 'ascorbyl glucoside', 'sodium ascorbyl phosphate', 'magnesium ascorbyl phosphate', 'tetrahexyldecyl ascorbate', 'ethyl ascorbic acid', '3-o-ethyl ascorbic acid',
+  'salicylic acid', 'glycolic acid', 'mandelic acid', 'azelaic acid', 'gluconolactone', 'lactobionic acid', 'ferulic acid', 'phytic acid', 'sodium phytate',
+  'disodium edta', 'tetrasodium edta', 'edta', 'calcium disodium edta', 'tetrasodium glutamate diacetate', 'trisodium ethylenediamine disuccinate', 'sodium gluconate', 'glucono delta lactone', 'E575',
+  'sodium hydroxide', 'potassium hydroxide', 'calcium hydroxide', 'magnesium hydroxide', 'sodium bicarbonate', 'baking soda', 'E500', 'potassium bicarbonate', 'ammonium bicarbonate', 'E503', 'sodium carbonate', 'calcium carbonate', 'E170', 'magnesium carbonate',
+  'arginine', 'lysine', 'glycine', 'alanine', 'proline', 'serine', 'amino acids', 'sodium chloride', 'salt', 'sea salt', 'table salt', 'iodized salt', 'kosher salt', 'potassium chloride', 'E508', 'magnesium chloride', 'calcium chloride', 'E509', 'magnesium sulfate', 'epsom salt', 'zinc sulfate', 'ferrous sulfate', 'zinc oxide', 'CI 77947',
+  // vitamins
+  'tocopherol', 'tocopherols', 'mixed tocopherols', 'vitamin e', 'd-alpha tocopherol', 'E306', 'E307', 'niacinamide', 'nicotinamide', 'niacin', 'riboflavin', 'thiamine', 'thiamin', 'thiamine mononitrate', 'thiamin mononitrate', 'folic acid', 'pyridoxine hydrochloride', 'cyanocobalamin', 'vitamin b12', 'vitamin b6', 'biotin',
+  'vitamin a', 'retinol', 'vitamin d', 'vitamin d2', 'vitamin d3', 'cholecalciferol', 'ergocalciferol', 'vitamin k', 'beta-carotene', 'beta carotene', 'E160a', 'calcium pantothenate', 'reduced iron', 'iron', 'electrolytic iron', 'zinc', 'calcium', 'magnesium', 'potassium', 'iodine',
+  // emollients, esters, fatty alcohols, emulsifiers
+  'caprylic/capric triglyceride', 'caprylic capric triglyceride', 'coco-caprylate', 'coco-caprylate/caprate', 'isopropyl myristate', 'isopropyl palmitate', 'ethylhexyl palmitate', 'cetyl alcohol', 'cetearyl alcohol', 'stearyl alcohol', 'behenyl alcohol', 'myristyl alcohol', 'lauryl alcohol', 'octyldodecanol',
+  'glyceryl stearate', 'glyceryl stearate se', 'glyceryl stearate citrate', 'glyceryl caprylate', 'glyceryl oleate', 'glyceryl linoleate', 'glyceryl behenate', 'glyceryl dibehenate', 'glyceryl rosinate', 'tribehenin', 'stearic acid', 'palmitic acid', 'myristic acid', 'lauric acid', 'oleic acid', 'linoleic acid', 'caprylic acid', 'capric acid',
+  'sorbitan olivate', 'cetearyl olivate', 'sorbitan stearate', 'sorbitan oleate', 'sorbitan sesquioleate', 'sorbitan laurate', 'sucrose stearate', 'sucrose cocoate', 'sucrose laurate', 'polyglyceryl', 'polyglyceryl-3 diisostearate', 'polyglyceryl-4 oleate', 'polyglyceryl-6 laurate', 'polyglyceryl-10 laurate', 'polyglyceryl-2 dipolyhydroxystearate',
+  'dicaprylyl carbonate', 'dicaprylyl ether', 'c12-15 alkyl benzoate', 'isononyl isononanoate', 'cetyl esters', 'cetyl palmitate', 'myristyl myristate', 'triethyl citrate', 'isoamyl laurate', 'heptyl undecylenate', 'undecane', 'tridecane', 'hemisqualane', 'ethyl macadamiate', 'jojoba esters', 'isostearyl isostearate', 'ethylhexyl stearate', 'diisopropyl adipate', 'propanediol dicaprylate', 'neopentyl glycol diheptanoate', 'coco-glucoside', 'cetearyl glucoside', 'arachidyl glucoside', 'arachidyl alcohol', 'behenyl alcohol', 'hydrogenated lecithin',
+  'lecithin', 'lecithins', 'soy lecithin', 'soya lecithins', 'soy lecithins', 'sunflower lecithins', 'soya lecithin', 'sunflower lecithin', 'E322', 'mono and diglycerides', 'mono- and diglycerides', 'mono- and diglycerides of fatty acids', 'E471', 'E472e', 'sodium stearoyl lactylate', 'E481', 'calcium stearoyl lactylate', 'sodium lauroyl lactylate', 'sodium stearoyl glutamate',
+  // gentle surfactants
+  'cocamidopropyl betaine', 'coco betaine', 'lauryl betaine', 'decyl glucoside', 'lauryl glucoside', 'coco glucoside', 'caprylyl/capryl glucoside', 'sodium cocoyl isethionate', 'sodium lauroyl sarcosinate', 'sodium cocoyl glutamate', 'disodium cocoyl glutamate', 'sodium lauroyl glutamate', 'sodium methyl cocoyl taurate', 'sodium cocoamphoacetate', 'disodium cocoamphodiacetate', 'sodium lauroamphoacetate', 'sodium lauryl sulfoacetate', 'sodium cocoyl glycinate', 'potassium cocoyl glycinate', 'sodium cocoyl apple amino acids', 'sodium lauroyl methyl isethionate',
+  'sodium stearate', 'sodium palmate', 'sodium cocoate', 'sodium olivate', 'sodium palm kernelate', 'sodium shea butterate', 'sodium castorate', 'potassium cocoate', 'potassium oleate', 'saponified oils', 'sodium tallowate',
+  // gentle preservatives
+  'potassium sorbate', 'E202', 'sorbic acid', 'E200', 'sodium levulinate', 'levulinic acid', 'sodium anisate', 'p-anisic acid', 'dehydroacetic acid', 'sodium dehydroacetate', 'caprylhydroxamic acid', 'hydroxyacetophenone', 'calcium propionate', 'E282', 'sodium propionate', 'nisin', 'E234', 'natamycin', 'rosemary extract', 'rosmarinus officinalis leaf extract', 'rosmarinus officinalis (rosemary) leaf extract', 'grapefruit seed extract',
+  // thickeners & gums
+  'xanthan gum', 'E415', 'guar gum', 'E412', 'gellan gum', 'E418', 'acacia gum', 'gum arabic', 'acacia senegal gum', 'E414', 'locust bean gum', 'carob bean gum', 'E410', 'tara gum', 'konjac', 'konjac gum', 'E425', 'cellulose gum', 'cellulose', 'E460', 'microcrystalline cellulose', 'hydroxyethylcellulose', 'hydroxypropyl methylcellulose', 'hypromellose', 'E464', 'methylcellulose', 'E461', 'sodium carboxymethylcellulose', 'carboxymethylcellulose', 'E466', 'pectin', 'E440', 'agar', 'agar agar', 'E406', 'sodium alginate', 'alginate', 'E401', 'gelatin', 'gelatine', 'collagen', 'hydrolyzed collagen',
+  'starch', 'corn starch', 'cornstarch', 'zea mays starch', 'modified starch', 'modified corn starch', 'modified food starch', 'modified tapioca starch', 'tapioca starch', 'potato starch', 'rice starch', 'oryza sativa starch', 'arrowroot', 'arrowroot powder', 'sodium starch octenylsuccinate', 'maltodextrin', 'dextrin', 'cyclodextrin', 'inulin', 'chicory root fiber', 'psyllium',
+  // minerals & pigments
+  'mica', 'CI 77019', 'silica', 'hydrated silica', 'silicon dioxide', 'E551', 'kaolin', 'bentonite', 'magnesium aluminum silicate', 'sodium magnesium silicate', 'alumina', 'boron nitride', 'synthetic fluorphlogopite', 'calcium sodium borosilicate', 'iron oxides', 'iron oxide', 'CI 77491', 'CI 77492', 'CI 77499', 'E172', 'ultramarines', 'CI 77007', 'chromium oxide greens', 'CI 77288', 'chromium hydroxide green', 'CI 77289', 'ferric ferrocyanide', 'CI 77510', 'manganese violet', 'CI 77742', 'bismuth oxychloride', 'CI 77163', 'barium sulfate', 'CI 77120', 'CI 77220', 'tin oxide', 'zinc stearate', 'magnesium stearate', 'calcium silicate', 'diatomaceous earth', 'french green clay', 'rhassoul clay', 'charcoal powder', 'activated charcoal',
+  'carmine', 'cochineal', 'CI 75470', 'E120', 'annatto', 'CI 75120', 'E160b', 'curcumin', 'CI 75300', 'E100', 'chlorophyllin', 'CI 75810', 'E140', 'E141', 'CI 40800', 'paprika extract', 'E160c', 'beetroot red', 'E162', 'anthocyanins', 'E163', 'spirulina extract', 'vegetable juice (for color)', 'fruit juice (for color)',
+  // oral care
+  'sodium monofluorophosphate', 'sodium fluoride', 'stannous fluoride', 'hydroxyapatite', 'nano-hydroxyapatite', 'calcium glycerophosphate', 'dicalcium phosphate', 'dicalcium phosphate dihydrate', 'menthol', 'stevia', 'steviol glycosides', 'rebaudioside a', 'E960', 'monk fruit extract', 'luo han guo',
+  // botanicals (common)
+  'aloe barbadensis leaf juice', 'aloe vera', 'aloe barbadensis leaf extract', 'butyrospermum parkii butter', 'shea butter', 'butyrospermum parkii (shea) butter', 'simmondsia chinensis seed oil', 'jojoba oil', 'argania spinosa kernel oil', 'argan oil', 'prunus amygdalus dulcis oil', 'sweet almond oil', 'helianthus annuus seed oil', 'sunflower seed oil', 'olea europaea fruit oil', 'cocos nucifera oil', 'ricinus communis seed oil', 'castor oil', 'rosa canina fruit oil', 'rosehip oil', 'vitis vinifera seed oil', 'grapeseed oil', 'persea gratissima oil', 'avocado oil', 'theobroma cacao seed butter', 'mangifera indica seed butter', 'mango butter',
+  'cera alba', 'beeswax', 'candelilla wax', 'euphorbia cerifera wax', 'euphorbia cerifera (candelilla) wax', 'carnauba wax', 'copernicia cerifera wax', 'copernicia cerifera cera', 'rice bran wax', 'sunflower seed wax', 'lanolin', 'glycine soja oil', 'squalane (olive)',
+  'camellia sinensis leaf extract', 'green tea extract', 'chamomilla recutita flower extract', 'calendula officinalis flower extract', 'centella asiatica extract', 'hamamelis virginiana water', 'witch hazel', 'glycyrrhiza glabra root extract', 'licorice root extract', 'caffeine', 'bakuchiol', 'adenosine', 'beta-glucan', 'oat beta glucan', 'colloidal oatmeal', 'avena sativa kernel flour', 'melaleuca alternifolia leaf oil', 'tea tree oil', 'mentha piperita oil', 'peppermint oil', 'lavandula angustifolia oil', 'lavender oil', 'eucalyptus globulus leaf oil',
+  'ceramide np', 'ceramide ap', 'ceramide eop', 'ceramide ns', 'ceramides', 'cholesterol', 'phytosphingosine', 'acetyl hexapeptide-8', 'palmitoyl tripeptide-1', 'palmitoyl tetrapeptide-7', 'palmitoyl pentapeptide-4', 'copper tripeptide-1', 'ubiquinone', 'coenzyme q10', 'resveratrol', 'ectoin', 'madecassoside', 'asiaticoside',
+  'alcohol', 'ethanol', 'alcohol denat', 'alcohol denat.', 'sd alcohol 40', 'isopropyl alcohol', 'hydrogen peroxide', 'sodium hydroxide', 'hydrolyzed wheat protein', 'hydrolyzed silk', 'silk amino acids', 'keratin', 'hydrolyzed keratin', 'hydrolyzed oat protein', 'hydrolyzed rice protein',
+  // food basics
+  'sugar', 'cane sugar', 'brown sugar', 'raw sugar', 'beet sugar', 'powdered sugar', 'icing sugar', 'coconut sugar', 'dextrose', 'glucose', 'fructose', 'sucrose', 'lactose', 'maltose', 'glucose syrup', 'glucose-fructose syrup', 'corn syrup', 'high fructose corn syrup', 'invert sugar', 'invert sugar syrup', 'molasses', 'maple syrup', 'agave syrup', 'rice syrup', 'brown rice syrup', 'malt extract', 'barley malt extract',
+  'wheat flour', 'enriched flour', 'enriched wheat flour', 'unbleached enriched flour', 'whole wheat flour', 'whole grain wheat flour', 'rice flour', 'corn flour', 'cornmeal', 'oat flour', 'almond flour', 'rye flour', 'spelt flour', 'semolina', 'durum wheat semolina', 'oats', 'rolled oats', 'whole grain oats', 'corn', 'rice', 'brown rice', 'quinoa', 'barley', 'wheat', 'wheat gluten', 'vital wheat gluten',
+  'milk', 'skim milk', 'whole milk', 'milk powder', 'skimmed milk powder', 'whole milk powder', 'cream', 'butter', 'cheese', 'whey', 'whey powder', 'whey protein', 'whey protein concentrate', 'whey protein isolate', 'milk protein', 'milk protein concentrate', 'casein', 'sodium caseinate', 'buttermilk', 'yogurt', 'cultured milk', 'lactase', 'milkfat', 'milk fat',
+  'egg', 'eggs', 'whole egg', 'egg white', 'egg whites', 'egg yolk', 'yeast', 'yeast extract', 'nutritional yeast', 'enzymes', 'cultures', 'live cultures', 'bacterial cultures', 'lactic acid bacteria', 'probiotic cultures',
+  'soybean oil', 'canola oil', 'rapeseed oil', 'sunflower oil', 'high oleic sunflower oil', 'safflower oil', 'olive oil', 'extra virgin olive oil', 'coconut oil', 'palm oil', 'palm fruit oil', 'palm kernel oil', 'vegetable oil', 'corn oil', 'peanut oil', 'sesame oil', 'avocado oil', 'cocoa butter', 'shea butter', 'ghee',
+  'cocoa', 'cocoa powder', 'cocoa mass', 'cocoa liquor', 'chocolate liquor', 'unsweetened chocolate', 'chocolate', 'dark chocolate', 'vanilla', 'vanilla extract', 'vanilla bean', 'vanillin', 'ethyl vanillin', 'natural flavor', 'natural flavors', 'natural flavour', 'natural flavoring', 'natural flavouring', 'flavoring', 'flavouring', 'flavor', 'flavour', 'artificial flavor', 'artificial flavors', 'spices', 'spice', 'herbs', 'cinnamon', 'paprika', 'turmeric', 'black pepper', 'garlic', 'garlic powder', 'onion', 'onion powder', 'mustard', 'mustard seed', 'ginger',
+  'tomato', 'tomatoes', 'tomato paste', 'tomato puree', 'potatoes', 'carrots', 'celery', 'peas', 'lentils', 'chickpeas', 'beans', 'soybeans', 'apples', 'apple juice concentrate', 'lemon juice', 'lemon juice concentrate', 'lime juice', 'orange juice', 'strawberries', 'raisins', 'dates', 'almonds', 'peanuts', 'hazelnuts', 'cashews', 'walnuts', 'sunflower seeds', 'pumpkin seeds', 'chia seeds', 'flaxseed', 'sesame seeds', 'coconut', 'desiccated coconut',
+  'baking powder', 'sodium acid pyrophosphate', 'E450', 'sodium phosphate', 'disodium phosphate', 'trisodium phosphate', 'E339', 'calcium phosphate', 'tricalcium phosphate', 'monocalcium phosphate', 'E341', 'potassium phosphate', 'dipotassium phosphate', 'E340', 'tartar', 'cream of tartar', 'pectin',
+  'phosphoric acid', 'E338', 'green tea', 'black tea', 'tea leaves', 'coffee', 'cocoa processed with alkali', 'skimmed milk', 'monosodium glutamate', 'msg', 'E621', 'disodium inosinate', 'disodium guanylate', 'E627', 'E631', 'E635', 'calcium sulfate', 'E516', 'magnesium oxide', 'carbon dioxide', 'E290', 'nitrogen', 'E941', 'sucralose', 'E955', 'acesulfame potassium', 'acesulfame k', 'E950'
+];
+</script>
+<script id="engine">
+/* ==========================================================================
+   ANALYSIS ENGINE — pure, synchronous, no DOM. Exposed as window.Engine.
+   ========================================================================== */
+const Engine = (function () {
+  'use strict';
+
+  const TIERS = {
+    1: { key: 't1', label: 'Confirmed harmful', short: 'Harmful' },
+    2: { key: 't2', label: 'Likely harmful', short: 'Likely harmful' },
+    3: { key: 't3', label: 'Precautionary', short: 'Precaution' },
+    4: { key: 't4', label: 'Clean', short: 'Clean' }
+  };
+
+  /* ---------- normalization ---------- */
+  function clean(s) {
+    return String(s == null ? '' : s)
+      .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/aluminium/g, 'aluminum')
+      .replace(/sulph/g, 'sulf')
+      .replace(/colour/g, 'color')
+      .replace(/flavour/g, 'flavor');
+  }
+  // Matching key: lowercase words separated by single spaces ('PEG-100 Stearate' -> 'peg 100 stearate').
+  function key(s) {
+    return clean(s)
+      .replace(/&/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\be (?=\d{3,4}\b)/g, 'e')          // 'E 211' -> 'e211'
+      .replace(/\b(e\d{3,4}) ([a-f])\b/g, '$1$2')   // 'E150(d)' -> 'e150d'
+      .replace(/\b(e\d{3,4}[a-f]?) (i{1,3}|iv)\b/g, '$1');
+  }
+
+  /* ---------- index ---------- */
+  const exact = new Map();   // key -> entry
+  const phrases = [];        // { k, entry }
+  const entries = [];
+  const warnings = [];
+
+  function addKey(k, entry, allowPhrase) {
+    if (!k) return;
+    const prev = exact.get(k);
+    if (prev && prev !== entry) {
+      if (!(prev.safe && entry.safe)) warnings.push('Duplicate name "' + k + '" in ' + prev.name + ' and ' + entry.name);
+      if (!prev.safe) return; // first flagged definition wins
+    }
+    exact.set(k, entry);
+    if (allowPhrase && k.length >= 3) phrases.push({ k: k, entry: entry });
+  }
+
+  function slug(s) { return key(s).replace(/ /g, '-'); }
+
+  INGREDIENTS.forEach(function (e) {
+    const g = GROUPS[e.group];
+    if (!g) warnings.push('Unknown group "' + e.group + '" for ' + e.names[0]);
+    const G = g || {};
+    const entry = {
+      id: e.id || slug(e.names[0]),
+      name: e.names[0],
+      names: e.names,
+      group: e.group,
+      tier: e.tier || G.tier,
+      tierIn: e.tierIn || G.tierIn || null,
+      label: e.label || G.label || '',
+      why: e.why || G.why || '',
+      effects: e.effects || G.effects || [],
+      onlyIn: e.onlyIn || G.onlyIn || null,
+      ethoxylated: !!(e.ethoxylated || G.ethoxylated),
+      benzeneRisk: !!(e.benzeneRisk || G.benzeneRisk),
+      safe: false
+    };
+    const exactOnly = (e.exact || []).map(key);
+    entries.push(entry);
+    e.names.forEach(function (n) {
+      const k = key(n);
+      addKey(k, entry, exactOnly.indexOf(k) === -1 && k.length > 2);
+    });
+  });
+
+  SAFE_INGREDIENTS.forEach(function (n) {
+    const k = key(n);
+    if (!k) return;
+    if (exact.has(k)) {
+      if (!exact.get(k).safe) warnings.push('"' + n + '" is in SAFE_INGREDIENTS but also flagged as ' + exact.get(k).name);
+      return;
+    }
+    const entry = { id: 'safe-' + slug(n), name: n, names: [n], tier: 4, label: 'Known clean ingredient', why: 'Widely used ingredient with a good safety record.', effects: [], safe: true };
+    exact.set(k, entry);
+    if (k.length >= 4) phrases.push({ k: k, entry: entry });
+  });
+
+  // Longest phrases first so the most specific match wins.
+  phrases.sort(function (a, b) { return b.k.length - a.k.length; });
+
+  function tierOf(entry, ctx) {
+    return (ctx && entry.tierIn && entry.tierIn[ctx]) || entry.tier;
+  }
+  function applies(entry, ctx) {
+    return !entry.onlyIn || !ctx || entry.onlyIn === ctx;
+  }
+  function lookupExact(k, ctx) {
+    const e = exact.get(k);
+    return e && applies(e, ctx) ? e : null;
+  }
+  // Best phrase match inside k: longest flagged phrase; safe phrases only as fallback.
+  function lookupPhrase(k, ctx) {
+    const hay = ' ' + k + ' ';
+    let safeHit = null;
+    for (let i = 0; i < phrases.length; i++) {
+      const p = phrases[i];
+      if (p.k.length > k.length) continue;
+      if (hay.indexOf(' ' + p.k + ' ') === -1) continue;
+      if (!applies(p.entry, ctx)) continue;
+      if (!p.entry.safe) return p.entry;
+      if (!safeHit) safeHit = p.entry;
+    }
+    return safeHit;
+  }
+
+  /* ---------- heuristics for unknown names ---------- */
+  const NATURAL_WORDS = /\b(extract|extracts|oil|oils|butter|juice|juices|flour|powder|leaf|leaves|seed|seeds|fruit|fruits|root|roots|flower|flowers|bark|peel|rind|stem|milk|water|puree|concentrate|cream|cheese|meal|starch|protein|fiber|fibre|honey|vinegar|sugar|syrup|salt|spice|spices|herb|herbs|wax|gum|resin|kernel|nut|nuts|bean|beans|rice|corn|wheat|oat|oats|barley|rye|egg|eggs|yeast|cocoa|cacao|coffee|tea|vanilla|pepper|garlic|onion|tomato|tomatoes|potato|potatoes|apple|apples|lemon|lime|orange|berry|berries|grape|grapes|coconut|almond|almonds|soy|soya|pea|peas|lentil|lentils|chickpea|chickpeas|meat|beef|pork|chicken|turkey|fish|salmon|tuna|shrimp|culture|cultures|enzyme|enzymes|vegetable|vegetables|plant|herbal|mushroom|mushrooms|algae|seaweed|kelp|clay|mud|aloe|whey|casein|lecithin|cheddar|mozzarella|parmesan|chocolate|cinnamon|ginger|mint|basil|oregano|thyme|parsley|rosemary|sage|carrot|carrots|spinach|kale|broccoli|celery|cabbage|beet|beets|banana|mango|pineapple|peach|pear|cherry|cherries|strawberry|strawberries|raspberry|raspberries|blueberry|blueberries|cranberry|cranberries|date|dates|fig|figs|raisin|raisins|walnut|walnuts|pecan|pecans|cashew|cashews|hazelnut|hazelnuts|pistachio|pistachios|peanut|peanuts|sesame|sunflower|pumpkin|olive|olives|avocado|flower|petal|petals|blossom|needle|needles|wood|cone|husk|bran|germ|sprout|sprouts|malt|noodles|pasta|bread|crumbs|breadcrumbs|chips|filling|sauce|broth|stock|seasoning|dough|crust|batter|jam|jelly|paste|flakes|grains|grain)\b/;
+  const CHEM_HINT = /(methyl|ethyl|propyl|butyl|pentyl|hexyl|heptyl|octyl|nonyl|decyl|lauryl|myristyl|cetyl|stearyl|oleyl|benzyl|phenyl|chlor|brom|fluor|iod|hydroxy|amino|nitro|sulfo|sulfon|phosph|cyclo|poly|siloxan|silan|amine|amide|imide|azol|azin|hydantoin|carboxy|glycol|glyceryl|isothiazol|dimer|ester|ether|anhydride|benz|naphth|tri|tetra|penta|hexa|isostear|diol|triol)/g;
+  const CHEM_END = /(yl|ate|ite|ide|ium|ane|ene|yne|one|ol|al|ine|oate)$/;
+
+  function looksChemical(k) {
+    if (!k) return false;
+    const letters = k.replace(/[^a-z]/g, '');
+    if (letters.length < 4) return false;
+    const hasDigits = /\d/.test(k);
+    const natural = NATURAL_WORDS.test(k);
+    if (natural && !hasDigits) return false;
+    let hits = (k.match(CHEM_HINT) || []).length;
+    k.split(' ').forEach(function (w) { if (w.length > 4 && CHEM_END.test(w)) hits++; });
+    if (hasDigits && letters.length >= 4 && hits >= 1) return true;
+    if (hasDigits && /\b[a-z]{2,} \d|\d [a-z]{4,}/.test(k) && !natural) return true;
+    if (hits >= 3) return true;
+    if (hits >= 2 && k.length >= 10) return true;
+    return false;
+  }
+
+  /* ---------- classify one ingredient (given its name variants) ---------- */
+  function mkDb(entry, ctx) {
+    return {
+      status: entry.safe ? 'safe' : 'db', tier: tierOf(entry, ctx), id: 'db:' + entry.id,
+      name: entry.name, label: entry.label, why: entry.why, effects: entry.effects,
+      ethoxylated: entry.ethoxylated, benzeneRisk: entry.benzeneRisk, entry: entry
+    };
+  }
+  function mkRule(rule) {
+    return {
+      status: 'class', tier: rule.tier, id: 'class:' + rule.id, name: rule.label, label: rule.label,
+      why: rule.why, effects: rule.effects, ethoxylated: !!rule.ethoxylated, rule: rule
+    };
+  }
+
+  function classify(names, ctx) {
+    const keys = [];
+    names.forEach(function (n) { const k = key(n); if (k && keys.indexOf(k) === -1) keys.push(k); });
+    if (!keys.length) return null;
+
+    // 1. Exact match on the full name wins outright.
+    const full = lookupExact(keys[0], ctx);
+    let result = full ? mkDb(full, ctx) : null;
+
+    // 2. Exact / phrase matches on every variant: worst flagged tier wins.
+    if (!result) {
+      let best = null, safeHit = null;
+      keys.forEach(function (k) {
+        const m = lookupExact(k, ctx) || lookupPhrase(k, ctx);
+        if (!m) return;
+        if (m.safe) { if (!safeHit) safeHit = m; return; }
+        if (!best || tierOf(m, ctx) < tierOf(best, ctx)) best = m;
+      });
+      // 3. Chemical-class rules — also override a partial DB match when they are more severe
+      //    (e.g. 'Perfluorononyl Dimethicone' is PFAS, not just a silicone).
+      let rule = null;
+      keys.forEach(function (k) {
+        CLASS_RULES.forEach(function (r) { if ((!rule || r.tier < rule.tier) && r.test(k)) rule = r; });
+      });
+      if (best && (!rule || tierOf(best, ctx) <= rule.tier)) result = mkDb(best, ctx);
+      else if (rule) result = mkRule(rule);
+      else if (safeHit) result = mkDb(safeHit, ctx);
+    }
+
+    // 4. Unknown names.
+    if (!result) {
+      if (keys.some(looksChemical)) {
+        result = {
+          status: 'unknown-chemical', tier: 3, id: 'unknown:' + keys[0], name: 'Unrecognized chemical name', label: 'Unrecognized chemical name',
+          why: 'Not in the database, and its name looks like a synthetic chemical — review it before trusting this product.',
+          effects: ['Unknown — not yet reviewed']
+        };
+      } else {
+        result = {
+          status: 'unlisted', tier: 4, id: 'unlisted:' + keys[0], name: 'Not in database', label: 'Not in database',
+          why: 'Not in the database; the name does not suggest a harmful chemical class, so it is assumed clean — review if unsure.',
+          effects: []
+        };
+      }
+    }
+
+    // Ethoxylation (drives the inferred 1,4-dioxane warning).
+    if (!result.ethoxylated && result.status !== 'safe') {
+      result.ethoxylated = keys.some(function (k) {
+        return hasEthSuffix(k) || /\bpeg\b|polyethylene glycol|polyoxyethylene|oxynol|\bpolyoxyl\b/.test(k);
+      });
+    }
+    return result;
+  }
+
+  /* ---------- parsing an ingredient list ---------- */
+  function splitTop(t) {
+    const out = [];
+    let depth = 0, buf = '';
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (c === '(' || c === '[' || c === '{') depth++;
+      else if (c === ')' || c === ']' || c === '}') depth = Math.max(0, depth - 1);
+      if (depth === 0) {
+        const prev = t[i - 1] || '', next = t[i + 1] || '';
+        let sep = false;
+        if (c === ',' ) sep = !(/\d/.test(prev) && /\d/.test(next));
+        else if (c === ';' || c === '•' || c === '·' || c === '|' || c === '•') sep = true;
+        else if (c === '.') {
+          const word = (buf.match(/([a-z]+)$/i) || ['', ''])[1];
+          sep = (next === '' || (/\s/.test(next) && /^\s*[A-Z(]/.test(t.slice(i + 1)))) && word.length > 3 && !/\d/.test(prev);
+        }
+        if (sep) { out.push(buf); buf = ''; continue; }
+      }
+      buf += c;
+    }
+    out.push(buf);
+    return out.map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+  // Food-label function words: 'emulsifier: soy lecithin' -> 'soy lecithin'.
+  const FUNCTION_PREFIX = /^(?:emulsifiers?|stabili[sz]ers?|thickeners?|thickening agents?|gelling agents?|preservatives?|acidity regulators?|acidulants?|antioxidants?|raising agents?|leavening agents?|leavening|colou?rs?|colou?rings?|sweeteners?|flavou?r enhancers?|humectants?|anti-?caking agents?|firming agents?|glazing agents?|flour treatment agents?|emulsifying salts?|acids?|vitamins?|minerals?)\s*:\s*(?=\S)/i;
+
+  function tidy(s) {
+    return s.replace(/\s+/g, ' ')
+      .replace(/^(?:and\/or|and|&|or|with)\s+/i, '')
+      .replace(FUNCTION_PREFIX, '')
+      .replace(/^[\s:.\-–—*]+|[\s:.\-–—*]+$/g, '')
+      .trim();
+  }
+
+  function slashParts(s) {
+    if (s.indexOf('/') === -1) return [];
+    const parts = s.split('/').map(function (p) { return p.trim(); });
+    if (parts.length < 2 || !parts.every(function (p) { return /[a-z]{2,}/i.test(p); })) return [];
+    return parts;
+  }
+
+  function parseSegment(seg) {
+    seg = tidy(seg);
+    if (!seg || !/[a-z]/i.test(seg)) return null;
+    let outer = '', depth = 0, cur = '';
+    const groups = [];
+    for (let i = 0; i < seg.length; i++) {
+      const c = seg[i];
+      if (c === '(' || c === '[' || c === '{') { if (depth === 0) { cur = ''; } else cur += c; depth++; continue; }
+      if (c === ')' || c === ']' || c === '}') { depth = Math.max(0, depth - 1); if (depth === 0) { groups.push(cur); } else cur += c; continue; }
+      if (depth === 0) outer += c; else cur += c;
+    }
+    if (depth > 0 && cur) groups.push(cur);
+    outer = tidy(outer);
+    const children = [], synonyms = [];
+    groups.forEach(function (g) {
+      const parts = splitTop(g);
+      if (parts.length > 1) parts.forEach(function (p) { const n = parseSegment(p); if (n) children.push(n); });
+      else if (tidy(g)) synonyms.push(tidy(g));
+    });
+    const primary = outer || synonyms.shift() || '';
+    if (!primary) return children.length === 1 ? children[0] : null;
+    const names = [children.length ? primary : seg];
+    if (children.length === 0 && primary !== seg) names.push(primary);
+    slashParts(primary).forEach(function (p) { names.push(p); });
+    synonyms.forEach(function (s) { names.push(s); slashParts(s).forEach(function (p) { names.push(p); }); });
+    return { display: children.length ? primary : seg, names: names, children: children };
+  }
+
+  function preprocess(text) {
+    return String(text || '')
+      .replace(/\r?\n+/g, ', ')
+      .replace(/_/g, '')
+      .replace(/\b(?:other\s+|in)?active\s+ingredients?\s*[:\-–]?/gi, ', ')
+      .replace(/\bingr[eé]dients?\s*[:\-–]/gi, ', ')
+      .replace(/\binci\s*:/gi, ', ')
+      .replace(/\bcontains?\s+(?:\d+(?:\.\d+)?\s*%\s+or\s+less\s+of|less\s+than\s+\d+(?:\.\d+)?\s*%\s+of)(?:\s+the\s+following)?\s*:?/gi, ', ')
+      .replace(/\b(?:\d+(?:\.\d+)?\s*%\s+or\s+less\s+of|less\s+than\s+\d+(?:\.\d+)?\s*%\s+of)\s*:?/gi, ', ')
+      .replace(/\bmay\s+contain\s*(?:\(\s*\+\s*\/\s*-\s*\)|\[\s*\+\s*\/\s*-\s*\]|\+\s*\/\s*-)?\s*:?/gi, ', ')
+      .replace(/[\[(]\s*\+\s*\/\s*-\s*[\])]\s*:?/g, ', ')
+      .replace(/\+\s*\/\s*-\s*:?/g, ', ')
+      .replace(/±/g, ', ')
+      .replace(/\b(?:contains|allergens?)\s*:/gi, ', ')
+      .replace(/\d+(?:[.,]\d+)?\s*%/g, '')
+      .replace(/\(\s*\)|\[\s*\]/g, '');
+  }
+
+  function parseIngredientText(text) {
+    return splitTop(preprocess(text)).map(parseSegment).filter(Boolean);
+  }
+
+  /* ---------- analyze a whole product ---------- */
+  function analyzeProduct(text, opts) {
+    const ctx = (opts && opts.context) || null;
+    const tree = parseIngredientText(text);
+    const nodes = [];
+    (function walk(list, depth) {
+      list.forEach(function (n) {
+        n.depth = depth;
+        n.result = classify(n.names, ctx);
+        nodes.push(n);
+        if (n.children.length) walk(n.children, depth + 1);
+      });
+    })(tree, 0);
+
+    const flaggedMap = new Map();
+    const seen = new Set();
+    const counts = { total: 0, clean: 0, flagged: 0, byTier: { 1: 0, 2: 0, 3: 0, 4: 0 }, unlisted: 0 };
+    const review = [];
+    const ethoxylatedFound = [];
+    let benzoate = null, vitaminC = false;
+
+    nodes.forEach(function (n) {
+      const r = n.result;
+      if (!r) return;
+      const k = key(n.display);
+      // A compound ingredient label ("Chocolate (sugar, cocoa…)") that is itself unknown isn't counted.
+      const isWrapper = n.children.length && (r.status === 'unlisted' || r.status === 'safe');
+      if (!isWrapper && !seen.has(k)) {
+        seen.add(k);
+        counts.total++;
+        counts.byTier[r.tier]++;
+        if (r.tier === 4) counts.clean++; else counts.flagged++;
+        if (r.status === 'unlisted') { counts.unlisted++; review.push(n.display); }
+      }
+      if (r.tier < 4) {
+        let f = flaggedMap.get(r.id);
+        if (!f) { f = Object.assign({}, r, { found: [] }); flaggedMap.set(r.id, f); }
+        if (f.found.indexOf(n.display) === -1) f.found.push(n.display);
+      }
+      if (r.ethoxylated && ethoxylatedFound.indexOf(n.display) === -1) ethoxylatedFound.push(n.display);
+      if (r.benzeneRisk) benzoate = benzoate || n.display;
+      if (n.names.some(function (nm) { return /\b(ascorbic acid|vitamin c|e30[0-2]|sodium ascorbate|calcium ascorbate)\b/.test(key(nm)); })) vitaminC = true;
+    });
+
+    const inferred = [];
+    if (ethoxylatedFound.length) {
+      inferred.push({
+        status: 'inferred', tier: 1, id: 'inferred:dioxane', name: '1,4-Dioxane (likely contaminant)', label: 'Inferred manufacturing contaminant',
+        why: 'Not on the label, but ethoxylated ingredients (PEGs and "-eth" names) are routinely contaminated with 1,4-dioxane, a likely human carcinogen.',
+        effects: GROUPS.dioxane.effects,
+        found: ['Inferred from: ' + ethoxylatedFound.join(', ')]
+      });
+    }
+    if (benzoate && vitaminC) {
+      inferred.push({
+        status: 'inferred', tier: 3, id: 'inferred:benzene', name: 'Benzene formation risk', label: 'Ingredient combination',
+        why: 'A benzoate preservative combined with vitamin C can form benzene (a known carcinogen), especially with heat or light.',
+        effects: ['Benzene formation (known human carcinogen)'],
+        found: ['Combination: ' + benzoate + ' + vitamin C']
+      });
+    }
+
+    const flagged = Array.from(flaggedMap.values()).concat(inferred)
+      .sort(function (a, b) { return a.tier - b.tier || a.found[0].localeCompare(b.found[0]); });
+    const byTier = { 1: [], 2: [], 3: [] };
+    flagged.forEach(function (f) { byTier[f.tier].push(f); });
+    const watch = flagged.filter(function (f) { return f.status === 'class' || f.status === 'unknown-chemical' || f.status === 'inferred'; });
+
+    let worst = 4;
+    nodes.forEach(function (n) { if (n.result && n.result.tier < worst) worst = n.result.tier; });
+    inferred.forEach(function (f) { if (f.tier < worst) worst = f.tier; });
+    const verdict = !nodes.length ? 'UNKNOWN' : worst === 1 ? 'AVOID' : worst <= 3 ? 'CAUTION' : 'CLEAN';
+
+    return { tree: tree, nodes: nodes, flagged: flagged, byTier: byTier, watch: watch, inferred: inferred, review: review, counts: counts, worst: worst, verdict: verdict, context: ctx };
+  }
+
+  /* ---------- single-ingredient lookup & search ---------- */
+  function analyzeName(name, ctx) {
+    const seg = parseSegment(String(name || ''));
+    if (!seg) return null;
+    return classify(seg.names, ctx || null);
+  }
+
+  function search(q, limit) {
+    const k = key(q);
+    if (!k) return [];
+    const scored = [];
+    entries.forEach(function (e) {
+      let best = 0;
+      e.names.forEach(function (n) {
+        const nk = key(n);
+        if (nk === k) best = Math.max(best, 3);
+        else if (nk.indexOf(k) === 0) best = Math.max(best, 2);
+        else if (nk.indexOf(k) > -1) best = Math.max(best, 1);
+      });
+      if (best) scored.push({ e: e, s: best });
+    });
+    scored.sort(function (a, b) { return b.s - a.s || a.e.tier - b.e.tier || a.e.name.localeCompare(b.e.name); });
+    return scored.slice(0, limit || 25).map(function (x) { return x.e; });
+  }
+
+  function entriesByTier() {
+    const out = { 1: [], 2: [], 3: [] };
+    entries.forEach(function (e) { out[e.tier].push(e); });
+    Object.keys(out).forEach(function (t) { out[t].sort(function (a, b) { return a.name.localeCompare(b.name); }); });
+    return out;
+  }
+
+  if (warnings.length && typeof console !== 'undefined') console.warn('[ingredient-db]', warnings);
+
+  return {
+    TIERS: TIERS, key: key, parseIngredientText: parseIngredientText, analyzeProduct: analyzeProduct,
+    analyzeName: analyzeName, search: search, entriesByTier: entriesByTier, looksChemical: looksChemical,
+    warnings: warnings, stats: { entries: entries.length, names: exact.size, rules: CLASS_RULES.length }
+  };
+})();
+</script>
+<script id="app">
+/* ==========================================================================
+   APP — camera, product lookup, UI
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  // ZXing is loaded from cdnjs; the local copy is only a fallback if the CDN is unreachable.
+  // Keep this list in sync with ZXING_URLS in sw.js.
+  const ZXING_SOURCES = [
+    'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.3/zxing.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/zxing-js/0.21.3/umd/index.min.js',
+    'zxing.min.js'
+  ];
+  const HISTORY_KEY = 'scanner.history.v1';
+  const HISTORY_MAX = 10;
+  const LOOKUP_TIMEOUT_MS = 12000;
+  const API_FIELDS = 'code,product_name,product_name_en,generic_name,brands,image_front_small_url,image_front_url,image_small_url,image_url,ingredients_text,ingredients_text_en,ingredients,lang';
+
+  const $ = function (s, r) { return (r || document).querySelector(s); };
+  const esc = function (s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  };
+  const plural = function (n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); };
+
+  const els = {
+    video: $('#video'), reticle: $('#reticle'), hint: $('#scanHint'), fallback: $('#camFallback'),
+    fbTitle: $('#fbTitle'), fbText: $('#fbText'), torch: $('#torchBtn'), install: $('#installBtn'),
+    sheet: $('#sheet'), sheetTitle: $('#sheetTitle'), sheetBody: $('#sheetBody'), sheetFooter: $('#sheetFooter'),
+    backdrop: $('#backdrop'), toast: $('#toast')
+  };
+
+  /* ---------------------------------------------------------------- icons */
+  const ICON = {
+    box: '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>',
+    alert: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>',
+    search: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>'
+  };
+
+  /* ---------------------------------------------------------------- toast */
+  let toastTimer = 0;
+  function toast(msg) {
+    els.toast.textContent = msg;
+    els.toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { els.toast.classList.remove('show'); }, 2600);
+  }
+
+  /* ---------------------------------------------------------------- ZXing loader */
+  let Z = null;
+  let zxingFailed = false;
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      const s = document.createElement('script');
+      s.src = src; s.async = true;
+      s.onload = function () { window.ZXing ? resolve(window.ZXing) : reject(new Error('ZXing global missing')); };
+      s.onerror = function () { s.remove(); reject(new Error('Failed to load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  const zxingReady = ZXING_SOURCES.reduce(function (p, src) {
+    return p.catch(function () { return loadScript(src); });
+  }, Promise.reject()).then(function (lib) {
+    Z = lib;
+    Scanner.initReader();
+    if (Scanner.stream) setHint('Align the barcode inside the frame');
+    return lib;
+  }).catch(function (err) {
+    zxingFailed = true;
+    console.error(err);
+    setHint('Scanner failed to load — enter the barcode manually');
+  });
+
+  /* ---------------------------------------------------------------- camera scanner */
+  function setHint(t) { els.hint.textContent = t; }
+
+  const Scanner = {
+    stream: null, track: null, reader: null, timer: 0, paused: false, blocked: false,
+    canvas: document.createElement('canvas'), ctx: null, lastText: '', lastAt: 0, torchOn: false,
+
+    initReader: function () {
+      const hints = new Map();
+      hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [
+        Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.UPC_A, Z.BarcodeFormat.UPC_E, Z.BarcodeFormat.EAN_8, Z.BarcodeFormat.QR_CODE
+      ]);
+      hints.set(Z.DecodeHintType.TRY_HARDER, true);
+      this.reader = new Z.MultiFormatReader();
+      this.reader.setHints(hints);
+    },
+
+    start: async function () {
+      if (this.stream) return;
+      hideFallback();
+      if (!window.isSecureContext) return showFallback('insecure');
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return showFallback('unsupported');
+      setHint('Starting camera…');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        if (document.hidden) { stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+        this.stream = stream;
+        this.track = stream.getVideoTracks()[0];
+        this.blocked = false;
+        els.video.srcObject = stream;
+        await els.video.play().catch(function () {});
+        document.body.classList.add('cam-on');
+        this.setupTrack();
+        setHint(Z ? 'Align the barcode inside the frame' : (zxingFailed ? 'Scanner failed to load — enter the barcode manually' : 'Loading scanner…'));
+        this.loop();
+      } catch (err) {
+        console.warn('Camera error', err);
+        const n = err && err.name;
+        if (n === 'NotAllowedError' || n === 'SecurityError' || n === 'PermissionDeniedError') { this.blocked = true; showFallback('denied'); }
+        else if (n === 'NotFoundError' || n === 'OverconstrainedError' || n === 'DevicesNotFoundError') showFallback('notfound');
+        else if (n === 'NotReadableError' || n === 'TrackStartError' || n === 'AbortError') showFallback('busy');
+        else showFallback('generic');
+      }
+    },
+
+    stop: function () {
+      clearTimeout(this.timer);
+      if (this.stream) this.stream.getTracks().forEach(function (t) { t.stop(); });
+      this.stream = null; this.track = null; this.torchOn = false;
+      els.video.srcObject = null;
+      els.torch.hidden = true;
+      els.torch.classList.remove('on');
+      document.body.classList.remove('cam-on');
+    },
+
+    setupTrack: function () {
+      const t = this.track;
+      const caps = t && t.getCapabilities ? t.getCapabilities() : {};
+      els.torch.hidden = !caps.torch;
+      if (caps.focusMode && caps.focusMode.indexOf('continuous') > -1) {
+        t.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(function () {});
+      }
+    },
+
+    toggleTorch: function () {
+      if (!this.track) return;
+      const on = !this.torchOn;
+      this.track.applyConstraints({ advanced: [{ torch: on }] }).then(function () {
+        Scanner.torchOn = on;
+        els.torch.classList.toggle('on', on);
+      }).catch(function () { toast('Flashlight not available'); });
+    },
+
+    loop: function () {
+      const self = this;
+      clearTimeout(this.timer);
+      (function tick() {
+        if (!self.stream) return;
+        if (!self.paused && self.reader && els.video.readyState >= 2) self.decodeFrame();
+        self.timer = setTimeout(tick, 140);
+      })();
+    },
+
+    // Decode only the part of the frame under the reticle — faster and more accurate.
+    decodeFrame: function () {
+      const v = els.video, vw = v.videoWidth, vh = v.videoHeight;
+      if (!vw || !vh) return;
+      const vr = v.getBoundingClientRect(), rr = els.reticle.getBoundingClientRect();
+      const s = Math.max(vr.width / vw, vr.height / vh);              // object-fit: cover scale
+      const dx = (vr.width - vw * s) / 2, dy = (vr.height - vh * s) / 2;
+      let sx = (rr.left - vr.left - dx) / s, sy = (rr.top - vr.top - dy) / s;
+      let sw = rr.width / s, sh = rr.height / s;
+      sx -= sw * 0.12; sw *= 1.24; sy -= sh * 0.3; sh *= 1.6;           // generous margin
+      sx = Math.max(0, sx); sy = Math.max(0, sy);
+      sw = Math.min(vw - sx, sw); sh = Math.min(vh - sy, sh);
+      if (sw < 20 || sh < 20) return;
+      const scale = Math.min(1, 960 / sw);
+      const c = this.canvas;
+      c.width = Math.round(sw * scale); c.height = Math.round(sh * scale);
+      if (!this.ctx) this.ctx = c.getContext('2d', { willReadFrequently: true });
+      this.ctx.drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      try {
+        const bitmap = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(c)));
+        const res = this.reader.decodeWithState(bitmap);
+        this.onResult(res.getText(), Z.BarcodeFormat[res.getBarcodeFormat()]);
+      } catch (e) {
+        /* NotFound / Checksum / Format exceptions are normal between frames */
+      }
+    },
+
+    onResult: function (text, format) {
+      // Ignore a code that has stayed in view since it was last handled; it can be
+      // scanned again once it has been out of view for a moment.
+      const now = Date.now();
+      const repeat = text === this.lastText && now - this.lastAt < 1500;
+      this.lastText = text; this.lastAt = now;
+      if (repeat) return;
+      this.paused = true;
+      if (navigator.vibrate) navigator.vibrate(60);
+      els.reticle.classList.add('hit');
+      setTimeout(function () { els.reticle.classList.remove('hit'); }, 700);
+      handleScan(text, format);
+    }
+  };
+
+  const FALLBACK_COPY = {
+    denied: ['Camera access is blocked', 'Allow camera access for this site in your browser settings (iPhone: Settings › Safari › Camera; Android: tap the icon left of the address bar), then tap Try again.'],
+    insecure: ['Camera needs a secure connection', 'Open this app over https:// (or localhost) to use the camera.'],
+    unsupported: ['Camera not supported', 'This browser cannot access the camera. Try Safari on iPhone or Chrome on Android.'],
+    notfound: ['No camera found', 'This device does not seem to have a usable camera.'],
+    busy: ['Camera is busy', 'Another app or tab may be using the camera. Close it and tap Try again.'],
+    generic: ['Camera unavailable', 'The camera could not be started.']
+  };
+  function showFallback(kind) {
+    const c = FALLBACK_COPY[kind] || FALLBACK_COPY.generic;
+    els.fbTitle.textContent = c[0];
+    els.fbText.textContent = c[1] + ' You can still type a barcode or paste an ingredient list.';
+    els.fallback.hidden = false;
+    document.body.classList.add('cam-fallback');
+  }
+  function hideFallback() {
+    els.fallback.hidden = true;
+    document.body.classList.remove('cam-fallback');
+  }
+
+  /* ---------------------------------------------------------------- barcode helpers */
+  function upcEtoA(e) {
+    const ns = e[0], d = e.slice(1, 7), check = e[7];
+    let m;
+    switch (d[5]) {
+      case '0': case '1': case '2': m = d.slice(0, 2) + d[5] + '0000' + d.slice(2, 5); break;
+      case '3': m = d.slice(0, 3) + '00000' + d.slice(3, 5); break;
+      case '4': m = d.slice(0, 4) + '00000' + d[4]; break;
+      default: m = d.slice(0, 5) + '0000' + d[5];
+    }
+    return ns + m + check;
+  }
+  function gtinValid(code) {
+    if (!/^\d{8,14}$/.test(code)) return false;
+    const digits = code.split('').map(Number), check = digits.pop();
+    let sum = 0;
+    digits.reverse().forEach(function (d, i) { sum += d * (i % 2 === 0 ? 3 : 1); });
+    return (10 - (sum % 10)) % 10 === check;
+  }
+  function barcodeCandidates(code, format) {
+    const list = [];
+    const add = function (c) { if (c && list.indexOf(c) === -1) list.push(c); };
+    if (format === 'UPC_E' && code.length === 8) code = upcEtoA(code);
+    if (code.length === 12) add('0' + code);
+    add(code);
+    if (code.length === 8 && /^[01]/.test(code) && format !== 'EAN_8') {
+      const a = upcEtoA(code);
+      if (gtinValid(a)) add('0' + a);
+    }
+    if (code.length === 13 && code[0] === '0') add(code.slice(1));
+    return list;
+  }
+
+  function handleScan(raw, format) {
+    const text = String(raw || '').trim();
+    let code = text.replace(/\s+/g, '');
+    if (format === 'QR_CODE' || !/^\d+$/.test(code)) {
+      const gs1 = text.match(/\/01\/(\d{8,14})(?:[/?#]|$)/);
+      if (gs1) code = gs1[1];
+      else if (!/^\d{8,14}$/.test(code)) return renderQrInfo(text);
+    }
+    lookupBarcode(code, format);
+  }
+
+  /* ---------------------------------------------------------------- product lookup */
+  async function fetchJSON(url) {
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(function () { if (ctl) ctl.abort(); }, LOOKUP_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, { signal: ctl ? ctl.signal : undefined, headers: { Accept: 'application/json' } });
+      if (res.status === 404) return { status: 0 };
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const SOURCES = [
+    { name: 'Open Food Facts', context: 'food', host: 'https://world.openfoodfacts.org' },
+    { name: 'Open Beauty Facts', context: 'beauty', host: 'https://world.openbeautyfacts.org' }
+  ];
+
+  function extractIngredients(p) {
+    const lang = p.lang;
+    const t = p.ingredients_text_en || (lang && p['ingredients_text_' + lang]) || p.ingredients_text || '';
+    if (t && t.trim()) return t.replace(/_/g, '').trim();
+    if (Array.isArray(p.ingredients) && p.ingredients.length) {
+      const fmt = function (i) {
+        return (i.text || '').replace(/_/g, '') + (Array.isArray(i.ingredients) && i.ingredients.length ? ' (' + i.ingredients.map(fmt).join(', ') + ')' : '');
+      };
+      return p.ingredients.map(fmt).filter(Boolean).join(', ');
+    }
+    return '';
+  }
+
+  async function fetchBoth(code) {
+    const results = await Promise.all(SOURCES.map(function (src) {
+      return fetchJSON(src.host + '/api/v2/product/' + encodeURIComponent(code) + '.json?fields=' + API_FIELDS)
+        .then(function (j) { return { ok: true, src: src, product: j && j.status === 1 && j.product ? j.product : null }; })
+        .catch(function (e) { console.warn(src.name, e); return { ok: false, src: src, product: null }; });
+    }));
+    const found = results.filter(function (r) { return r.product; });
+    const withIng = found.filter(function (r) { return extractIngredients(r.product); });
+    return { ok: results.some(function (r) { return r.ok; }), hit: withIng[0] || found[0] || null };
+  }
+
+  function toRecord(code, hit) {
+    const p = hit.product;
+    return {
+      code: p.code || code,
+      name: (p.product_name_en || p.product_name || p.generic_name || '').trim() || 'Unnamed product',
+      brand: (p.brands || '').split(',')[0].trim(),
+      image: p.image_front_small_url || p.image_small_url || p.image_front_url || p.image_url || '',
+      source: hit.src.name,
+      context: hit.src.context,
+      url: hit.src.host + '/product/' + encodeURIComponent(p.code || code),
+      ingredientsText: extractIngredients(p),
+      scannedAt: Date.now()
+    };
+  }
+
+  let lookupToken = 0;
+  async function lookupBarcode(code, format) {
+    const token = ++lookupToken;
+    renderLoading(code);
+    const candidates = barcodeCandidates(code, format);
+    let anyOk = false, hit = null, usedCode = candidates[0];
+    for (let i = 0; i < candidates.length && !hit; i++) {
+      const r = await fetchBoth(candidates[i]);
+      if (token !== lookupToken) return;
+      anyOk = anyOk || r.ok;
+      if (r.hit) { hit = r.hit; usedCode = candidates[i]; }
+      if (!r.ok) break;
+    }
+    if (token !== lookupToken || !state.sheetOpen) return;
+    if (hit) {
+      const rec = toRecord(usedCode, hit);
+      if (rec.ingredientsText) { saveHistory(rec); renderResult(rec); }
+      else renderPaste({ reason: 'noIngredients', record: rec });
+    } else {
+      renderPaste({ reason: anyOk ? 'notFound' : 'offline', record: { code: code, name: '', context: null } });
+    }
+  }
+
+  /* ---------------------------------------------------------------- history */
+  function loadHistory() {
+    try { const h = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); return Array.isArray(h) ? h : []; }
+    catch (e) { return []; }
+  }
+  function saveHistory(rec) {
+    try {
+      const sameAs = function (h) { return rec.code ? h.code === rec.code : (!h.code && h.name === rec.name && h.ingredientsText === rec.ingredientsText); };
+      const list = loadHistory().filter(function (h) { return !sameAs(h); });
+      list.unshift(rec);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX)));
+    } catch (e) { /* storage full or blocked — history is a convenience */ }
+  }
+  function clearHistory() {
+    try { localStorage.removeItem(HISTORY_KEY); } catch (e) { /* ignore */ }
+  }
+
+  /* ---------------------------------------------------------------- sheet */
+  const state = { sheetOpen: false, view: null, record: null, report: null };
+
+  function openSheet(opts) {
+    state.view = opts.view;
+    els.sheetTitle.textContent = opts.title || '';
+    els.sheetBody.innerHTML = opts.body || '';
+    els.sheetFooter.innerHTML = opts.footer || '';
+    els.sheetFooter.hidden = !opts.footer;
+    els.sheet.classList.toggle('full', !!opts.full);
+    els.sheetBody.scrollTop = 0;
+    Scanner.paused = true;
+    if (!state.sheetOpen) {
+      state.sheetOpen = true;
+      els.sheet.setAttribute('aria-hidden', 'false');
+      els.backdrop.classList.add('show');
+      requestAnimationFrame(function () { els.sheet.classList.add('open'); });
+      try { history.pushState({ sheet: true }, ''); } catch (e) { /* ignore */ }
+    }
+  }
+  function hideSheet() {
+    if (!state.sheetOpen) return;
+    state.sheetOpen = false;
+    state.view = null;
+    lookupToken++;
+    els.sheet.classList.remove('open');
+    els.sheet.style.transform = '';
+    els.sheet.setAttribute('aria-hidden', 'true');
+    els.backdrop.classList.remove('show');
+    if (document.activeElement && els.sheet.contains(document.activeElement)) document.activeElement.blur();
+    Scanner.lastAt = Date.now();
+    Scanner.paused = false;
+    if (!Scanner.stream && !Scanner.blocked && !document.hidden) Scanner.start();
+  }
+  function closeSheet() {
+    if (!state.sheetOpen) return;
+    if (history.state && history.state.sheet) history.back(); // popstate -> hideSheet
+    else hideSheet();
+  }
+  window.addEventListener('popstate', function () { if (state.sheetOpen) hideSheet(); });
+
+  // Drag the handle/header down to dismiss.
+  (function () {
+    const grab = $('#sheetGrab');
+    let y0 = 0, dy = 0, dragging = false;
+    grab.addEventListener('touchstart', function (e) { dragging = true; y0 = e.touches[0].clientY; dy = 0; els.sheet.style.transition = 'none'; }, { passive: true });
+    grab.addEventListener('touchmove', function (e) {
+      if (!dragging) return;
+      dy = Math.max(0, e.touches[0].clientY - y0);
+      els.sheet.style.transform = 'translateY(' + dy + 'px)';
+    }, { passive: true });
+    grab.addEventListener('touchend', function () {
+      if (!dragging) return;
+      dragging = false;
+      els.sheet.style.transition = '';
+      els.sheet.style.transform = '';
+      if (dy > 110) closeSheet();
+    });
+  })();
+
+  /* ---------------------------------------------------------------- views */
+  function tierClass(t) { return 't' + t; }
+  function pill(t) { return '<span class="pill ' + tierClass(t) + '">Tier ' + t + ' · ' + Engine.TIERS[t].short + '</span>'; }
+  const CONTEXT_LABEL = { food: 'Food', beauty: 'Personal care' };
+
+  function renderLoading(code) {
+    openSheet({
+      view: 'loading', title: 'Looking up product',
+      body: '<div class="loading"><div class="spinner" aria-hidden="true"></div><p>Searching Open Food Facts and Open Beauty Facts…</p><p class="mono muted">' + esc(code) + '</p></div>',
+      footer: '<button class="btn ghost" data-action="close">Cancel</button>'
+    });
+  }
+
+  function renderQrInfo(text) {
+    openSheet({
+      view: 'qr', title: 'QR code scanned',
+      body: '<div class="notice"><div class="notice-icon">' + ICON.alert + '</div><div><h3>Not a product barcode</h3><p>This QR code does not contain a product number we can look up.</p></div></div>' +
+        '<p class="label">QR content</p><pre class="qr-text">' + esc(text) + '</pre>',
+      footer: '<button class="btn" data-action="close">Scan again</button>'
+    });
+  }
+
+  function verdictCopy(report) {
+    const c = report.counts, w = report.worst;
+    if (report.verdict === 'AVOID') {
+      const contaminant = report.inferred.some(function (f) { return f.tier === 1; });
+      if (!c.byTier[1]) return 'Likely contaminated with 1,4-dioxane';
+      return 'Contains ' + plural(c.byTier[1], 'confirmed-harmful ingredient') + (contaminant ? ' + a likely contaminant' : '');
+    }
+    if (w === 2) return 'Contains ' + plural(c.byTier[2], 'ingredient') + ' of strong concern';
+    if (w === 3) return 'Only precautionary flags found';
+    if (report.verdict === 'UNKNOWN') return 'No ingredients could be read';
+    return 'No flagged ingredients found';
+  }
+
+  function flagCard(f) {
+    const inferred = f.status === 'inferred';
+    const matched = f.status === 'db' && Engine.key(f.name) !== Engine.key(f.found[0]) ? 'Matched: ' + esc(f.name) + ' · ' : '';
+    return '<article class="flag ' + tierClass(f.tier) + '">' +
+      '<header><h4>' + esc(inferred ? f.name : f.found.join(', ')) + '</h4>' + pill(f.tier) + '</header>' +
+      '<p class="flag-label">' + (inferred ? esc(f.found[0]) : matched + esc(f.label) + (f.status === 'class' ? ' · <em>class-based</em>' : '')) + '</p>' +
+      '<p class="why">' + esc(f.why) + '</p>' +
+      (f.effects && f.effects.length ? '<ul class="effects">' + f.effects.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul>' : '') +
+      '</article>';
+  }
+
+  function chipsHtml(report) {
+    const idx = new Map();
+    report.nodes.forEach(function (n, i) { idx.set(n, i); });
+    function chips(list) {
+      return list.map(function (n) {
+        const r = n.result;
+        const cls = 'chip ' + tierClass(r.tier) + (r.status === 'unlisted' ? ' unlisted' : '');
+        let h = '<button class="' + cls + '" data-action="chip" data-i="' + idx.get(n) + '">' + esc(n.display) + '</button>';
+        if (n.children.length) h += '<span class="chip-group">' + chips(n.children) + '</span>';
+        return h;
+      }).join('');
+    }
+    return chips(report.tree);
+  }
+
+  function infoCardHtml(title, r) {
+    if (!r) return '';
+    const status = { db: 'In database', safe: 'Known clean ingredient', class: 'Flagged by chemical class', 'unknown-chemical': 'Unrecognized — chemical-sounding name', unlisted: 'Not in database' }[r.status] || '';
+    return '<div class="info ' + tierClass(r.tier) + '"><header><h4>' + esc(title) + '</h4>' + pill(r.tier) + '</header>' +
+      '<p class="flag-label">' + esc(status) + (r.status === 'db' && Engine.key(r.name) !== Engine.key(title) ? ' · matched ' + esc(r.name) : '') + (r.label && r.status !== 'safe' && r.status !== 'unlisted' ? ' · ' + esc(r.label) : '') + '</p>' +
+      '<p class="why">' + esc(r.why) + '</p>' +
+      (r.effects && r.effects.length ? '<ul class="effects">' + r.effects.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') + '</ul>' : '') +
+      '</div>';
+  }
+
+  function renderResult(rec) {
+    const report = Engine.analyzeProduct(rec.ingredientsText, { context: rec.context });
+    state.record = rec; state.report = report;
+    const c = report.counts, vt = report.verdict === 'UNKNOWN' ? 0 : report.worst;
+    const total = Math.max(1, c.total);
+
+    let h = '<div class="product">' +
+      '<div class="thumb">' + (rec.image ? '<img src="' + esc(rec.image) + '" alt="" referrerpolicy="no-referrer" onerror="this.remove()">' : '') + ICON.box + '</div>' +
+      '<div class="product-text"><h2>' + esc(rec.name || 'Unnamed product') + '</h2>' +
+      (rec.brand ? '<p class="muted">' + esc(rec.brand) + '</p>' : '') +
+      '<p class="meta">' + [rec.source, CONTEXT_LABEL[rec.context], rec.code].filter(Boolean).map(esc).join(' · ') + '</p></div></div>';
+
+    h += '<div class="verdict ' + (vt ? tierClass(vt) : 'tnone') + '"><div class="verdict-badge">' + report.verdict + '</div>' +
+      '<div class="verdict-text"><strong>' + esc(verdictCopy(report)) + '</strong>' +
+      '<span>' + c.clean + ' clean · ' + c.flagged + ' flagged · ' + c.total + ' total</span></div></div>';
+
+    h += '<div class="tierbar" aria-hidden="true">' + [1, 2, 3, 4].map(function (t) {
+      return c.byTier[t] ? '<span class="' + tierClass(t) + '" style="flex:' + (c.byTier[t] / total) + '"></span>' : '';
+    }).join('') + '</div>';
+    h += '<div class="legend">' + [1, 2, 3, 4].map(function (t) {
+      return '<span class="' + tierClass(t) + '"><i></i>' + c.byTier[t] + ' ' + Engine.TIERS[t].short.toLowerCase() + '</span>';
+    }).join('') + '</div>';
+
+    // What to watch out for
+    h += '<section class="watch"><h3>' + ICON.alert + ' What to watch out for</h3>';
+    if (report.watch.length) {
+      h += '<p class="muted small">Flagged by chemical class, naming pattern or ingredient combination — not by an exact database match.</p><ul>' +
+        report.watch.map(function (f) {
+          return '<li class="' + tierClass(f.tier) + '"><i></i><div><strong>' + esc(f.status === 'inferred' ? f.name : f.found.join(', ')) + '</strong>' +
+            '<span>' + esc(f.status === 'inferred' ? f.found[0] : f.label) + ' — ' + esc(f.why) + '</span></div></li>';
+        }).join('') + '</ul>';
+    } else {
+      h += '<p class="muted small">Nothing flagged by chemical class — every flag below comes from an exact database match.</p>';
+    }
+    h += '</section>';
+
+    // Flagged ingredients by tier
+    [1, 2, 3].forEach(function (t) {
+      const list = report.byTier[t];
+      if (!list.length) return;
+      h += '<section class="tier-section"><h3 class="' + tierClass(t) + '"><i></i>' + Engine.TIERS[t].label + ' <span class="count">' + list.length + '</span></h3>' +
+        list.map(flagCard).join('') + '</section>';
+    });
+    if (!report.flagged.length && report.nodes.length) {
+      h += '<section class="tier-section"><h3 class="t4"><i></i>No flagged ingredients</h3><p class="muted small">Nothing in this list matched tiers 1–3.</p></section>';
+    }
+
+    if (report.review.length) {
+      h += '<section class="review"><h3>Not in database <span class="count">' + report.review.length + '</span></h3>' +
+        '<p class="muted small">Assumed clean (they don\'t look like a harmful chemical class), but worth a manual check:</p>' +
+        '<p>' + report.review.map(esc).join(', ') + '</p></section>';
+    }
+
+    h += '<section class="all"><h3>Full ingredient list</h3><p class="muted small">Tap an ingredient for details.</p>' +
+      '<div class="chips">' + chipsHtml(report) + '</div><div id="chipInfo"></div></section>';
+
+    if (rec.url) h += '<p class="small"><a href="' + esc(rec.url) + '" target="_blank" rel="noopener">View or correct this product on ' + esc(rec.source) + ' ↗</a></p>';
+    h += '<p class="disclaimer">Tiers reflect a precautionary ruleset, not a medical or regulatory assessment. Concentration matters, and ingredient data from open databases can be incomplete.</p>';
+
+    openSheet({
+      view: 'result', title: 'Results', full: true, body: h,
+      footer: '<button class="btn ghost" data-action="edit">Edit ingredients</button><button class="btn" data-action="close">Scan again</button>'
+    });
+  }
+
+  function renderPaste(opts) {
+    const rec = opts.record || {};
+    const reasons = {
+      notFound: ['Product not found', 'Barcode ' + (rec.code || '') + ' isn\'t in Open Food Facts or Open Beauty Facts yet. Paste the ingredient list from the label to analyze it.'],
+      noIngredients: ['No ingredient list', 'Found “' + (rec.name || 'this product') + '” but it has no ingredient list yet. Paste it from the label to analyze it.'],
+      offline: ['Couldn\'t reach the product databases', 'Check your connection and try again — or paste the ingredient list to analyze it offline.'],
+      manual: null,
+      edit: null
+    };
+    const r = reasons[opts.reason];
+    const ctx = rec.context || '';
+    let h = '';
+    if (r) h += '<div class="notice"><div class="notice-icon">' + ICON.alert + '</div><div><h3>' + esc(r[0]) + '</h3><p>' + esc(r[1]) + '</p></div></div>';
+    h += '<form class="form" data-form="paste">' +
+      '<label>Product name <span class="muted">(optional)</span><input name="name" type="text" autocomplete="off" value="' + esc(rec.name || '') + '" placeholder="e.g. Daily moisturizer"></label>' +
+      '<label>Product type<select name="context">' +
+      '<option value=""' + (!ctx ? ' selected' : '') + '>Not sure</option>' +
+      '<option value="food"' + (ctx === 'food' ? ' selected' : '') + '>Food / drink</option>' +
+      '<option value="beauty"' + (ctx === 'beauty' ? ' selected' : '') + '>Personal care / cosmetic</option></select></label>' +
+      '<label>Ingredients<textarea name="ingredients" rows="7" placeholder="Water, Glycerin, Sodium Laureth Sulfate, …" required>' + esc(opts.text || '') + '</textarea></label>' +
+      '<p class="muted small">Tip: use Live Text (iPhone) or Google Lens (Android) on a photo of the label to copy the ingredient text.</p>' +
+      '<button class="btn block" type="submit">Analyze ingredients</button></form>';
+    if (opts.reason === 'notFound' && rec.code) {
+      h += '<p class="small center"><a href="https://world.openfoodfacts.org/cgi/product.pl?type=search_or_add&code=' + encodeURIComponent(rec.code) + '" target="_blank" rel="noopener">Add this product to Open Food Facts ↗</a></p>';
+    }
+    state.pasteBase = rec;
+    const footer = opts.reason === 'offline' && rec.code
+      ? '<button class="btn ghost" data-action="retry" data-code="' + esc(rec.code) + '">Retry</button><button class="btn" data-action="close">Scan again</button>'
+      : '<button class="btn ghost" data-action="close">' + (opts.reason === 'manual' ? 'Cancel' : 'Scan again') + '</button>';
+    openSheet({ view: 'paste', title: opts.reason === 'edit' ? 'Edit ingredients' : 'Analyze ingredients', full: true, body: h, footer: footer });
+  }
+
+  function renderManual() {
+    openSheet({
+      view: 'manual', title: 'Enter barcode',
+      body: '<form class="form" data-form="barcode">' +
+        '<label>Barcode number<input name="code" type="text" inputmode="numeric" pattern="[0-9 ]*" autocomplete="off" maxlength="18" placeholder="e.g. 3017624010701" required></label>' +
+        '<p class="muted small">The digits printed under the barcode (EAN-13, UPC-A, UPC-E or EAN-8).</p>' +
+        '<button class="btn block" type="submit">Look up product</button></form>',
+      footer: '<button class="btn ghost" data-action="close">Cancel</button>'
+    });
+    const input = $('input[name="code"]', els.sheetBody);
+    input.focus();
+  }
+
+  function renderHistory() {
+    const list = loadHistory();
+    let h;
+    if (!list.length) {
+      h = '<div class="empty"><p>No scans yet.</p><p class="muted small">Your last ' + HISTORY_MAX + ' products are saved on this device.</p></div>';
+    } else {
+      h = '<ul class="history">' + list.map(function (rec, i) {
+        const rep = Engine.analyzeProduct(rec.ingredientsText, { context: rec.context });
+        const t = rep.verdict === 'UNKNOWN' ? 'tnone' : tierClass(rep.worst);
+        const when = new Date(rec.scannedAt || Date.now()).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        return '<li><button data-action="open-history" data-i="' + i + '">' +
+          '<span class="thumb sm">' + (rec.image ? '<img src="' + esc(rec.image) + '" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : '') + ICON.box + '</span>' +
+          '<span class="h-text"><strong>' + esc(rec.name || 'Unnamed product') + '</strong><span class="muted small">' + esc([rec.brand, when].filter(Boolean).join(' · ')) + '</span></span>' +
+          '<span class="mini-verdict ' + t + '">' + rep.verdict + '</span>' + ICON.chevron + '</button></li>';
+      }).join('') + '</ul>';
+    }
+    openSheet({
+      view: 'history', title: 'Recent scans', full: list.length > 3, body: h,
+      footer: (list.length ? '<button class="btn ghost" data-action="clear-history">Clear history</button>' : '') + '<button class="btn" data-action="close">Done</button>'
+    });
+  }
+
+  /* ---------- ingredient search ---------- */
+  function renderSearch(initial) {
+    openSheet({
+      view: 'search', title: 'Ingredient lookup', full: true,
+      body: '<div class="searchbox">' + ICON.search + '<input id="q" type="search" placeholder="Type an ingredient, e.g. phenoxyethanol" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-label="Ingredient name"></div><div id="searchOut"></div>',
+      footer: '<button class="btn" data-action="close">Done</button>'
+    });
+    const q = $('#q');
+    q.value = initial || '';
+    q.addEventListener('input', function () { renderSearchResults(q.value); });
+    q.addEventListener('keydown', function (e) { if (e.key === 'Enter') q.blur(); });
+    renderSearchResults(q.value);
+    q.focus();
+  }
+
+  function renderSearchResults(v) {
+    const out = $('#searchOut');
+    if (!out) return;
+    const query = v.trim();
+    if (!query) {
+      const by = Engine.entriesByTier();
+      out.innerHTML = '<p class="muted small">Or browse the database (' + Engine.stats.entries + ' flagged ingredients, ' + Engine.stats.names + ' names and synonyms, ' + Engine.stats.rules + ' class rules):</p>' +
+        [1, 2, 3].map(function (t) {
+          return '<details class="browse ' + tierClass(t) + '"><summary><i></i>' + Engine.TIERS[t].label + ' <span class="count">' + by[t].length + '</span></summary><div class="chips">' +
+            by[t].map(function (e) { return '<button class="chip ' + tierClass(t) + '" data-action="search-entry" data-name="' + esc(e.name) + '">' + esc(e.name) + '</button>'; }).join('') +
+            '</div></details>';
+        }).join('');
+      return;
+    }
+    let h = '';
+    if (/[,;]/.test(query) && query.split(/[,;]/).filter(function (s) { return s.trim(); }).length > 1) {
+      h += '<button class="btn block ghost" data-action="analyze-list">Analyze as a full ingredient list</button>';
+    }
+    h += infoCardHtml(query, Engine.analyzeName(query, null));
+    const matches = Engine.search(query, 20);
+    if (matches.length) {
+      h += '<p class="label">Database matches</p><ul class="results">' + matches.map(function (e) {
+        const also = e.names.slice(1, 5).join(', ');
+        return '<li><button data-action="search-entry" data-name="' + esc(e.name) + '"><span><strong>' + esc(e.name) + '</strong>' +
+          '<span class="muted small">' + esc(e.label) + (also ? ' · also: ' + esc(also) : '') + '</span></span>' + pill(e.tier) + '</button></li>';
+      }).join('') + '</ul>';
+    }
+    out.innerHTML = h;
+  }
+
+  /* ---------------------------------------------------------------- events */
+  document.addEventListener('click', function (e) {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const a = btn.dataset.action;
+    switch (a) {
+      case 'close': closeSheet(); break;
+      case 'manual': renderManual(); break;
+      case 'paste': renderPaste({ reason: 'manual', record: {} }); break;
+      case 'history': renderHistory(); break;
+      case 'search': renderSearch(''); break;
+      case 'torch': Scanner.toggleTorch(); break;
+      case 'retry-camera': Scanner.blocked = false; Scanner.start(); break;
+      case 'retry': lookupBarcode(btn.dataset.code, null); break;
+      case 'edit':
+        if (state.record) renderPaste({ reason: 'edit', record: state.record, text: state.record.ingredientsText });
+        break;
+      case 'open-history': {
+        const rec = loadHistory()[+btn.dataset.i];
+        if (rec) renderResult(rec);
+        break;
+      }
+      case 'clear-history': clearHistory(); renderHistory(); toast('History cleared'); break;
+      case 'chip': {
+        const n = state.report && state.report.nodes[+btn.dataset.i];
+        const box = $('#chipInfo');
+        if (!n || !box) break;
+        els.sheetBody.querySelectorAll('.chip.sel').forEach(function (c) { c.classList.remove('sel'); });
+        btn.classList.add('sel');
+        box.innerHTML = infoCardHtml(n.display, n.result);
+        box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        break;
+      }
+      case 'search-entry': {
+        const q = $('#q');
+        if (q) { q.value = btn.dataset.name; renderSearchResults(q.value); els.sheetBody.scrollTop = 0; }
+        break;
+      }
+      case 'analyze-list': {
+        const q = $('#q');
+        if (q) renderPaste({ reason: 'manual', record: {}, text: q.value });
+        break;
+      }
+      case 'install':
+        if (deferredInstall) { deferredInstall.prompt(); deferredInstall = null; els.install.hidden = true; }
+        break;
+    }
+  });
+
+  document.addEventListener('submit', function (e) {
+    const form = e.target;
+    const kind = form.dataset.form;
+    if (!kind) return;
+    e.preventDefault();
+    if (kind === 'barcode') {
+      const code = form.code.value.replace(/\D/g, '');
+      if (code.length < 6 || code.length > 14) { toast('Enter 8–14 digits'); return; }
+      if (!gtinValid(code) && !(code.length === 8)) toast('Check digit looks off — trying anyway');
+      lookupBarcode(code, code.length === 8 ? null : 'MANUAL');
+    } else if (kind === 'paste') {
+      const text = form.ingredients.value.trim();
+      if (!text) { toast('Paste an ingredient list first'); return; }
+      const base = state.pasteBase || {};
+      const rec = {
+        code: base.code || '', name: form.name.value.trim() || base.name || 'Manual entry', brand: base.brand || '',
+        image: base.image || '', source: base.source ? base.source.replace(/ \+ manual$/, '') + ' + manual' : 'Manual entry',
+        context: form.context.value || null, url: base.url || '', ingredientsText: text, scannedAt: Date.now()
+      };
+      if (document.activeElement) document.activeElement.blur();
+      saveHistory(rec);
+      renderResult(rec);
+    }
+  });
+
+  els.backdrop.addEventListener('click', closeSheet);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && state.sheetOpen) closeSheet(); });
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) Scanner.stop();
+    else if (!Scanner.blocked) Scanner.start();
+  });
+
+  /* ---------------------------------------------------------------- PWA */
+  let deferredInstall = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    deferredInstall = e;
+    els.install.hidden = false;
+  });
+  window.addEventListener('appinstalled', function () { els.install.hidden = true; });
+
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function (err) { console.warn('SW registration failed', err); });
+    });
+  }
+
+  /* ---------------------------------------------------------------- boot */
+  setHint('Loading scanner…');
+  Scanner.start();
+  const params = new URLSearchParams(location.search);
+  if (params.get('view') === 'search') renderSearch(params.get('q') || '');
+  else if (params.get('view') === 'history') renderHistory();
+  else if (params.get('view') === 'paste') renderPaste({ reason: 'manual', record: {} });
+
+  // Exposed for debugging / testing only.
+  window.App = { Scanner: Scanner, handleScan: handleScan, renderResult: renderResult, zxingReady: zxingReady, upcEtoA: upcEtoA, barcodeCandidates: barcodeCandidates };
+})();
+</script>
+</body>
+</html>
